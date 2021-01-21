@@ -45,6 +45,14 @@ sub.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
 
 sub.setsockopt(zmq.SUBSCRIBE, b'pupil.')
 
+# open a sub port to listen to pupil in eye_1_3d
+
+sub_1_3d = context.socket(zmq.SUB)
+
+sub_1_3d.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
+
+sub_1_3d.setsockopt(zmq.SUBSCRIBE, b'pupil.1.3d')
+
 
 import numpy as np
 import math
@@ -52,55 +60,39 @@ import time
 import scipy.io
 
 sub.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
-topic,msg =  sub.recv_multipart()
-pupil_position = loads(msg)
-time0=pupil_position[b'timestamp']
+sub_1_3d.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
+topic,msg_1 =  sub_1_3d.recv_multipart()
+message_1 = loads(msg_1)
+time0=message_1[b'timestamp']
 
 # Coordinate transformation
-s_num = 1000
-data = np.zeros([s_num,5,3])
-
-tt=0
+data_length = 1000
+data_idx = 0
+data = np.zeros([data_length,5])
 
 time1 = 0
-j1=0
-j2=0
-j3=0
-j4=0
-j5=0
 
-while time1 <1000:
-    topic,msg=sub.recv_multipart()
-    pupil_position = loads(msg)
-    x, y = pupil_position[b'norm_pos']
-    time1 = pupil_position[b'timestamp'] - time0
-    print(time1, x, y)
+while time1 < 3:
+    topic,msg_1 =  sub_1_3d.recv_multipart()
+    message_1 = loads(msg_1)
+    x, y = message_1[b'norm_pos']
+    time1 = message_1[b'timestamp'] - time0  
+    theta = message_1[b'theta']
+    phi = message_1[b'phi']
+    
+    #print(time1, x, y, theta, phi)
+    print(theta, phi)
+    
+    if (data_idx < data_length) :
+        data[data_idx, :] = [time1, x, y, theta, phi]
+        data_idx = data_idx + 1
 
-    if time1<=5:
-        data[j1,0,:] = [time1, x, y]
-        j1=j1+1
-    else:
-        if 5<time1<=10:
-            data[j2,1,:] = [time1, x, y]
-            j2=j2+1
-        else:
-            if 10<time1<=15:
-                data[j3,2,:] = [time1, x, y]
-                j3=j3+1
-            else:
-                if 15<time1<=20:
-                    data[j4,3,:] = [time1, x, y]
-                    j4=j4+1
-                else:
-                    if 20<time1<=25:
-                        data[j5,4,:] = [time1, x, y]
-                        j5=j5+1
+topic,msg_1 =  sub_1_3d.recv_multipart()
+message_1 = loads(msg_1)
+print(message_1)
+    
 
-
-
-scipy.io.savemat('c:/tmp/arraydata.mat', mdict={'data': data})
-
-
-
+scipy.io.savemat('./arraydata.mat', mdict={'data': data})
             
 sub.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
+sub_1_3d.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
