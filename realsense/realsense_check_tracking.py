@@ -9,6 +9,7 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 from math import pi
+import time
 
 # Camera setting and tracking setting
 DEPTH_CAMERA_MAX_THETA = 57 / 2.0 * (pi / 180)
@@ -29,10 +30,11 @@ red_color = (0,0,255)
 
 # Start streaming
 pipeline.start(config)
+current_time_0 = time.time()
 
 try:
     while True:
-
+        current_time = time.time()
         # Wait for a coherent pair of frames: depth and color
         frames = pipeline.wait_for_frames()
         depth_frame = frames.get_depth_frame()
@@ -57,7 +59,7 @@ try:
         point_y = int(H/2 - H/2 * (np.tan(theta) / np.tan(DEPTH_CAMERA_MAX_THETA)))
         point_x = int(W/2 + W/2 * (np.tan(phi) / np.tan(DEPTH_CAMERA_MAX_PHI)))
         depth_colormap = cv2.line(depth_colormap, (point_x, point_y), (point_x, point_y), red_color, 5)
-        print(point_x, point_y, depth_image[point_y][point_x])
+        print(round(current_time - current_time_0, 4), point_x, point_y, depth_image[point_y][point_x])
 
         # Stack both images horizontally
         images = np.hstack((color_image, depth_colormap))
