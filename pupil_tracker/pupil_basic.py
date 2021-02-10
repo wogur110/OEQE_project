@@ -72,7 +72,7 @@ data = np.zeros([data_length,5])
 
 time1 = 0
 
-while time1 < 3:
+while time1 < 1:
     topic,msg_1 =  sub_1_3d.recv_multipart()
     message_1 = loads(msg_1)
     x, y = message_1[b'norm_pos']
@@ -81,7 +81,7 @@ while time1 < 3:
     phi = message_1[b'phi']
     
     #print(time1, x, y, theta, phi)
-    print(theta, phi)
+    print(time1, theta, phi)
     
     if (data_idx < data_length) :
         data[data_idx, :] = [time1, x, y, theta, phi]
