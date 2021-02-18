@@ -29,10 +29,9 @@ config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 # Color Config
 red_color = (0,0,255)
 
-# Start streaming
+# Start streaming for Realsense
 pipeline.start(config)
 current_time_0 = time.time()
-
 
 
 ## Setting for Pupil_tracker
@@ -59,6 +58,7 @@ req.send(b'SUB_PORT')
 
 sub_port = req.recv()
 
+'''
 # open a sub port to listen to pupil
 
 sub = context.socket(zmq.SUB)
@@ -66,6 +66,7 @@ sub = context.socket(zmq.SUB)
 sub.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
 
 sub.setsockopt(zmq.SUBSCRIBE, b'pupil.')
+'''
 
 # open a sub port to listen to pupil in eye_1_3d
 
@@ -81,7 +82,7 @@ import math
 import time
 import scipy.io
 
-sub.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
+#sub.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
 sub_1_3d.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
 topic,msg_1 =  sub_1_3d.recv_multipart()
 message_1 = loads(msg_1)
@@ -89,6 +90,8 @@ time0=message_1[b'timestamp']
 
 # Convert Config
 convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341, 0.7817]])
+np.save('./convert_matrix',convert_matrix)
+
 def convert_pupil_to_realsense(theta, phi) :
     x = np.sin(theta) * np.cos(phi)
     y = np.cos(theta)
@@ -109,15 +112,14 @@ def convert_pupil_to_realsense(theta, phi) :
 try:
     while True:
         current_time = time.time()
+
         # Collect Data from pupil_tracker &  Wait for a coherent pair of frames: depth and color
-        topic,msg_1 =  sub_1_3d.recv_multipart()
-        topic,msg_1 =  sub_1_3d.recv_multipart()
-        topic,msg_1 =  sub_1_3d.recv_multipart() # collect only 1 over 4 datas (120Hz -> 30Hz)
-        topic,msg_1 =  sub_1_3d.recv_multipart()
-        frames = pipeline.wait_for_frames() # realsense (30Hz)
+        sub_1_3d.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
+        topic,msg_1 =  sub_1_3d.recv_multipart() # pupil tracker (maximum 120Hz)
+        
+        frames = pipeline.wait_for_frames() # realsense (maximum 30Hz)
 
         message_1 = loads(msg_1)
-        time1 = message_1[b'timestamp'] - time0  
         theta = message_1[b'theta']
         phi = message_1[b'phi']
         
@@ -148,12 +150,11 @@ try:
         point_x = int(W/2 + W/2 * (np.tan(converted_phi) / np.tan(DEPTH_CAMERA_MAX_PHI)))
         point_y = np.clip(point_y, 0, H-1)
         point_x = np.clip(point_x, 0, W-1)        
-
         depth_colormap = cv2.line(depth_colormap, (point_x, point_y), (point_x, point_y), red_color, 5)
         text = "depth : " + str(depth_image[point_y][point_x]) + "mm"
         depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, red_color, 2)
-        print(round(time1, 6), theta, phi)
-        print(round(current_time - current_time_0, 4), point_x, point_y, depth_image[point_y][point_x])
+        print(round(current_time - current_time_0, 4), theta, phi)
+        print(point_x, point_y, depth_image[point_y][point_x])
 
         # Stack both images horizontally
         images = np.hstack((color_image, depth_colormap))
@@ -163,7 +164,11 @@ try:
         cv2.imshow('RealSense', images)
         cv2.waitKey(1)
 
+        sub_1_3d.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
+
 
 finally:
     # Stop streaming
     pipeline.stop()
+    #sub.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
+    sub_1_3d.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))

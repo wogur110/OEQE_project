@@ -25,3 +25,5 @@ coord_1, coord_2 = np.array(coord_1), np.array(coord_2)
 model_x = LinearRegression().fit(coord_1, X_2)
 model_y = LinearRegression().fit(coord_1, Y_2)
 model_z = LinearRegression().fit(coord_1, Z_2)
+
+print(model_x)
