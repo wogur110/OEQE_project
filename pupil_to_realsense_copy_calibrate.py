@@ -176,8 +176,31 @@ try:
         # Check tracking point on images
         converted_theta, converted_phi = convert_pupil_to_realsense(theta, phi)
 
+        H,W = color_image.shape[0], color_image.shape[1]
+        point_y = int(H/2 + H/2 * (np.tan(converted_theta) / np.tan(COLOR_CAMERA_MAX_THETA)))
+        point_x = int(W/2 + W/2 * (np.tan(converted_phi) / np.tan(COLOR_CAMERA_MAX_PHI)))
+        point_y = np.clip(point_y, 0, H-1)
+        point_x = np.clip(point_x, 0, W-1)  
+        color_image = cv2.line(color_image, (point_x, point_y), (point_x, point_y), red_color, 5)
+
+        H,W = depth_colormap.shape[0], depth_colormap.shape[1]
+        point_y = int(H/2 + H/2 * (np.tan(converted_theta) / np.tan(DEPTH_CAMERA_MAX_THETA)))
+        point_x = int(W/2 + W/2 * (np.tan(converted_phi) / np.tan(DEPTH_CAMERA_MAX_PHI)))
+        point_y = np.clip(point_y, 0, H-1)
+        point_x = np.clip(point_x, 0, W-1)        
+
+        depth_colormap = cv2.line(depth_colormap, (point_x, point_y), (point_x, point_y), red_color, 5)
+        text = "depth : " + str(depth_image[point_y][point_x]) + "mm"
+        depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, red_color, 2)
+        print(round(time1, 6), theta, phi)
+        print(round(current_time - current_time_0, 4), point_x, point_y, depth_image[point_y][point_x])
+
+        # Stack both images horizontally
+        images = np.hstack((color_image, depth_colormap))
+
         # Show images
         cv2.namedWindow('RealSense', cv2.WINDOW_AUTOSIZE)
+        cv2.imshow('RealSense', images)
         cv2.waitKey(1)
 
 
