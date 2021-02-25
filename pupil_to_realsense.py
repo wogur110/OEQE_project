@@ -109,6 +109,8 @@ def convert_pupil_to_realsense(theta, phi) :
 
 # Start Pupil_to_Realsense
 
+sample_idx = 0
+
 try:
     while True:
         current_time = time.time()
@@ -153,8 +155,10 @@ try:
         depth_colormap = cv2.line(depth_colormap, (point_x, point_y), (point_x, point_y), red_color, 5)
         text = "depth : " + str(depth_image[point_y][point_x]) + "mm"
         depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, red_color, 2)
+        #print(sample_idx)
         print(round(current_time - current_time_0, 4), theta, phi)
         print(point_x, point_y, depth_image[point_y][point_x])
+        sample_idx = sample_idx + 1
 
         # Stack both images horizontally
         images = np.hstack((color_image, depth_colormap))
