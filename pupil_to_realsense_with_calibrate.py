@@ -5,6 +5,7 @@
 ##      Open CV and Numpy integration        ##
 ###############################################
 import pdb
+import sys
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -56,7 +57,10 @@ def make_convert_matrix(sub):
     coord_1 = None
     coord_2 = None
 
-    degree = raw_input("type observed degree:")
+    if sys.version_info[0] < 3:
+        degree = raw_input("type observed degree:")
+    else:
+        degree = input("type observed degree:")
     while(degree != 'end' and degree != '-1'):
         degree = float(degree)
         theta_1 = pi/2
@@ -93,7 +97,6 @@ def make_convert_matrix(sub):
     print(coord_1)
     print(coord_2)
 
-    #pdb.set_trace()
     model_x = LinearRegression(fit_intercept=False).fit(coord_2,coord_1[:,0])
     model_y = LinearRegression(fit_intercept=False).fit(coord_2, coord_1[:,1])
     model_z = LinearRegression(fit_intercept=False).fit(coord_2, coord_1[:,2])
@@ -138,14 +141,21 @@ if __name__ == "__main__":
     topic,msg_1 =  sub_1_3d.recv_multipart()
     message_1 = loads(msg_1)
     time0=message_1[b'timestamp']
+    
+    if sys.version_info[0] < 3:
+        need_calculate = raw_input("Start Calculating?(Y/n) : ")
+    else:
+        need_calculate = input("Start Calculating?(Y/n) : ")
 
-    need_calculate = raw_input("Start Calculating?(Y/n) : ")
     if (need_calculate.upper() == "Y") :
         convert_matrix = make_convert_matrix(sub_1_3d)    
     print(convert_matrix)
     np.save('./convert_matrix',convert_matrix)
 
-    raw_input("Start Pupil_to_Realsense(press enter)")
+    if sys.version_info[0] < 3:
+        raw_input("Start Pupil_to_Realsense(press enter)")
+    else:
+        input("Start Pupil_to_Realsense(press enter)")
     
     # Start Pupil_to_Realsense
     try:
@@ -194,8 +204,6 @@ if __name__ == "__main__":
             depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, red_color, 2)
             print(round(current_time - current_time_0, 4), theta, phi)
             print(point_x, point_y, depth_image[point_y][point_x])
-
-            pdb.set_trace()
 
             # Stack both images horizontally
             images = np.hstack((color_image, depth_colormap))
