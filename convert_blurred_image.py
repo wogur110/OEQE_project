@@ -31,12 +31,6 @@ COLOR_CAMERA_MAX_PHI = 64 / 2.0 * (pi / 180)
 converted_theta = 0 * (pi / 180)
 converted_phi = 0 * (pi / 180)
 
-# Configure depth and color streams
-pipeline = rs.pipeline()
-config = rs.config()
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-
 ## Setting for Pupil_tracker
 addr = '127.0.0.1' # remote ip or localhost
 req_port = "50020" # same as in the pupil remote gui
@@ -47,7 +41,6 @@ eye_length = 24e-3
 res_window = 21,21
 window_size = 0.2e-3, 0.2e-3
 num_color_img_list = 8
-
 
 # Convert matrix default setting
 convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341, 0.7817]])
@@ -159,13 +152,13 @@ def blurring_image(color_img, depth_img, gaze_depth) :
 
     
     for color_img_idx, depth_idx in color_img_list :
-        b = pupil_diameter * abs(eye_length * (1/focal_length - 1 / (depth_idx/1000.0)) - 1)
+        b = pupil_diameter * abs(eye_length * (1/focal_length - 1 / (depth_idx/1000.0)) - 1) 
         kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b) ** 2)
+        kernel[radius > window_size[0]/2] = 0
         kernel = kernel / np.sum(kernel)
 
         blurred_image += cv2.filter2D(color_img_idx, -1, kernel)
         #blurred_image += color_img_idx
-        #pdb.set_trace()
         print(depth_idx)
 
     pixel_select = np.zeros_like(depth_img)  
@@ -175,11 +168,26 @@ def blurring_image(color_img, depth_img, gaze_depth) :
     #blurred_image += color_img_idx
 
     blurred_image = blurred_image / np.max(blurred_image)
-    #pdb.set_trace()
+
     return blurred_image
 
 
 if __name__ == "__main__":
+    # Configure depth and color streams
+    pipeline = rs.pipeline()
+    config = rs.config()
+
+    # L400
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    # #L515
+    # config.enable_stream(rs.stream.depth, 1024, 768, rs.format.z16, 30)
+    # config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+
+    # Align objects
+    align_to = rs.stream.color
+    align = rs.align(align_to)
+
     # Start streaming for Realsense
     pipeline.start(config)
     current_time_0 = time.time()
@@ -228,6 +236,11 @@ if __name__ == "__main__":
             
             frames = pipeline.wait_for_frames() # realsense (maximum 30Hz)
 
+            aligned_frames = align.process(frames)
+
+            depth_frame = aligned_frames.get_depth_frame()
+            color_frame = aligned_frames.get_color_frame()
+
             message_1 = loads(msg_1)
             theta = message_1[b'theta']
             phi = message_1[b'phi']
@@ -270,7 +283,7 @@ if __name__ == "__main__":
 
 
             # Stack both images horizontally
-            #images = np.hstack((color_image, depth_colormap, blurred_image))
+            # images = np.hstack((color_image, depth_colormap, blurred_image))
             images = np.hstack((color_image, blurred_image))
 
             # Show images
@@ -283,5 +296,4 @@ if __name__ == "__main__":
     finally:
         # Stop streaming
         pipeline.stop()
-        #sub.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
         sub_1_3d.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
