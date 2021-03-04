@@ -195,8 +195,6 @@ if __name__ == "__main__":
             print(round(current_time - current_time_0, 4), theta, phi)
             print(point_x, point_y, depth_image[point_y][point_x])
 
-            pdb.set_trace()
-
             # Stack both images horizontally
             images = np.hstack((color_image, depth_colormap))
 
