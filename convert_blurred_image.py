@@ -5,6 +5,7 @@
 ##      Open CV and Numpy integration        ##
 ###############################################
 import pdb
+import sys
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -40,6 +41,14 @@ config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 addr = '127.0.0.1' # remote ip or localhost
 req_port = "50020" # same as in the pupil remote gui
 
+## Setting for blurring image
+pupil_diameter = 2e-3
+eye_length = 24e-3
+res_window = 21,21
+window_size = 0.2e-3, 0.2e-3
+num_color_img_list = 8
+
+
 # Convert matrix default setting
 convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341, 0.7817]])
 
@@ -56,7 +65,10 @@ def make_convert_matrix(sub):
     coord_1 = None
     coord_2 = None
 
-    degree = raw_input("type observed degree:")
+    if sys.version_info[0] < 3:
+        degree = raw_input("type observed degree:")
+    else:
+        degree = input("type observed degree:")
     while(degree != 'end' and degree != '-1'):
         degree = float(degree)
         theta_1 = pi/2
@@ -93,12 +105,12 @@ def make_convert_matrix(sub):
     print(coord_1)
     print(coord_2)
 
-    #pdb.set_trace()
     model_x = LinearRegression(fit_intercept=False).fit(coord_2,coord_1[:,0])
     model_y = LinearRegression(fit_intercept=False).fit(coord_2, coord_1[:,1])
     model_z = LinearRegression(fit_intercept=False).fit(coord_2, coord_1[:,2])
 
-    return np.array([model_x.coef_, model_y.coef_, model_z.coef_])
+    convert_matrix = np.array([model_x.coef_, model_y.coef_, model_z.coef_])
+    return convert_matrix
        
 
 def convert_pupil_to_realsense(theta, phi) :
@@ -114,6 +126,57 @@ def convert_pupil_to_realsense(theta, phi) :
     converted_phi = np.arctan(converted_x / converted_z)
     
     return converted_theta, converted_phi
+
+
+def blurring_image(color_img, depth_img, gaze_depth) :
+    focal_length = 1 / (1/(gaze_depth/1000.0) + 1/eye_length)
+    c = 1   #coefficient for gaussian psf
+    color_img_list = []
+    color_img = color_img.astype(float)
+    depth_img = depth_img.astype(float)
+    blurred_image = np.zeros_like(color_img)
+
+    x,y = np.meshgrid(np.linspace(-window_size[0]/2, window_size[0]/2, res_window[0]), np.linspace(-window_size[1]/2, window_size[1]/2, res_window[1]))    
+    radius = np.sqrt(x*x + y*y)
+
+    depth_list = depth_img[depth_img > 0]
+
+    percentiles = np.linspace(0,100,num_color_img_list+1)
+    depth_bound_list = np.percentile(depth_list, percentiles)
+
+    for idx in range(num_color_img_list) :
+        pixel_select = np.ones_like(depth_img)
+        pixel_select[depth_img < depth_bound_list[idx]] = 0
+        pixel_select[depth_img >= depth_bound_list[idx+1]] = 0
+        
+        depth_select_list = depth_img[pixel_select == 1]
+        depth_idx = np.mean(depth_select_list)
+
+        pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
+        color_img_idx = color_img * pixel_select
+
+        color_img_list.append((color_img_idx, depth_idx))        
+
+    
+    for color_img_idx, depth_idx in color_img_list :
+        b = pupil_diameter * abs(eye_length * (1/focal_length - 1 / (depth_idx/1000.0)) - 1)
+        kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b) ** 2)
+        kernel = kernel / np.sum(kernel)
+
+        blurred_image += cv2.filter2D(color_img_idx, -1, kernel)
+        #blurred_image += color_img_idx
+        #pdb.set_trace()
+        print(depth_idx)
+
+    pixel_select = np.zeros_like(depth_img)  
+    pixel_select[depth_img == 0] = 1
+    pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
+    color_img_idx = color_img * pixel_select
+    #blurred_image += color_img_idx
+
+    blurred_image = blurred_image / np.max(blurred_image)
+    #pdb.set_trace()
+    return blurred_image
 
 
 if __name__ == "__main__":
@@ -138,14 +201,21 @@ if __name__ == "__main__":
     topic,msg_1 =  sub_1_3d.recv_multipart()
     message_1 = loads(msg_1)
     time0=message_1[b'timestamp']
+    
+    if sys.version_info[0] < 3:
+        need_calculate = raw_input("Start Calculating?(Y/n) : ")
+    else:
+        need_calculate = input("Start Calculating?(Y/n) : ")
 
-    need_calculate = raw_input("Start Calculating?(Y/n) : ")
     if (need_calculate.upper() == "Y") :
         convert_matrix = make_convert_matrix(sub_1_3d)    
     print(convert_matrix)
     np.save('./convert_matrix',convert_matrix)
 
-    raw_input("Start Pupil_to_Realsense(press enter)")
+    if sys.version_info[0] < 3:
+        raw_input("Start Pupil_to_Realsense(press enter)")
+    else:
+        input("Start Pupil_to_Realsense(press enter)")
     
     # Start Pupil_to_Realsense
     try:
@@ -177,13 +247,6 @@ if __name__ == "__main__":
             # Check tracking point on images
             converted_theta, converted_phi = convert_pupil_to_realsense(theta, phi)
 
-            H,W = color_image.shape[0], color_image.shape[1]
-            point_y = int(H/2 + H/2 * (np.tan(converted_theta) / np.tan(COLOR_CAMERA_MAX_THETA)))
-            point_x = int(W/2 + W/2 * (np.tan(converted_phi) / np.tan(COLOR_CAMERA_MAX_PHI)))
-            point_y = np.clip(point_y, 0, H-1)
-            point_x = np.clip(point_x, 0, W-1)  
-            color_image = cv2.line(color_image, (point_x, point_y), (point_x, point_y), red_color, 5)
-
             H,W = depth_colormap.shape[0], depth_colormap.shape[1]
             point_y = int(H/2 + H/2 * (np.tan(converted_theta) / np.tan(DEPTH_CAMERA_MAX_THETA)))
             point_x = int(W/2 + W/2 * (np.tan(converted_phi) / np.tan(DEPTH_CAMERA_MAX_PHI)))
@@ -195,8 +258,20 @@ if __name__ == "__main__":
             print(round(current_time - current_time_0, 4), theta, phi)
             print(point_x, point_y, depth_image[point_y][point_x])
 
+            blurred_image = blurring_image(color_image, depth_image, depth_image[point_y][point_x])
+
+            H,W = color_image.shape[0], color_image.shape[1]
+            point_y = int(H/2 + H/2 * (np.tan(converted_theta) / np.tan(COLOR_CAMERA_MAX_THETA)))
+            point_x = int(W/2 + W/2 * (np.tan(converted_phi) / np.tan(COLOR_CAMERA_MAX_PHI)))
+            point_y = np.clip(point_y, 0, H-1)
+            point_x = np.clip(point_x, 0, W-1)  
+            color_image = cv2.line(color_image, (point_x, point_y), (point_x, point_y), red_color, 5)
+            blurred_image = cv2.line(blurred_image, (point_x, point_y), (point_x, point_y), red_color, 5)
+
+
             # Stack both images horizontally
-            images = np.hstack((color_image, depth_colormap))
+            #images = np.hstack((color_image, depth_colormap, blurred_image))
+            images = np.hstack((color_image, blurred_image))
 
             # Show images
             cv2.namedWindow('RealSense', cv2.WINDOW_AUTOSIZE)
