@@ -18,7 +18,7 @@ depth_img = np.load('dataset/depth_image.npy')
 color_img = np.load('dataset/color_image.npy')
 
 point_y = 300
-point_x = 300
+point_x = 400
 
 gaze_depth = depth_img[point_y][point_x]
 
@@ -63,7 +63,7 @@ for color_img_idx, depth_idx in color_img_list :
     kernel[radius > window_size[0]/2] = 0
     kernel = kernel / np.sum(kernel)
 
-    blurred_image += cv2.filter2D(color_img_idx, -1, kernel)
+    # blurred_image += cv2.filter2D(color_img_idx, -1, kernel)
     #blurred_image += color_img_idx
     #print(depth_idx)
 
@@ -75,10 +75,16 @@ color_img_idx = color_img * pixel_select
 
 blurred_image = blurred_image / np.max(blurred_image)
 print("---{}s seconds---".format(time.time()-start_time))
-plt.imshow(blurred_image)
 
 
 
+depth_img = np.load('dataset/depth_image.npy')
+color_img = np.load('dataset/color_image.npy')
+
+point_y = 300
+point_x = 400
+
+gaze_depth = depth_img[point_y][point_x]
 """
 method 2: scipy.signal.fftconvolve
 """
@@ -90,7 +96,7 @@ c = 1   #coefficient for gaussian psf
 color_img_list = []
 color_img = color_img.astype(float)
 depth_img = depth_img.astype(float)
-blurred_image = np.zeros_like(color_img)
+blurred_image_2 = np.zeros_like(color_img)
 
 x,y = np.meshgrid(np.linspace(-window_size[0]/2, window_size[0]/2, res_window[0]), np.linspace(-window_size[1]/2, window_size[1]/2, res_window[1]))    
 radius = np.sqrt(x*x + y*y)
@@ -119,8 +125,7 @@ for color_img_idx, depth_idx in color_img_list :
     kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b) ** 2)
     kernel[radius > window_size[0]/2] = 0
     kernel = kernel / np.sum(kernel)
-    kernel = np.stack([kernel,kernel,kernel],axis=2)
-    blurred_image += fftconvolve(color_img_idx, kernel,mode='same')
+    # blurred_image_2 += fftconvolve(color_img_idx, kernel[:,:,np.newaxis],mode='same')
     #blurred_image += color_img_idx
     #print(depth_idx)
 
@@ -130,6 +135,12 @@ pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
 color_img_idx = color_img * pixel_select
 #blurred_image += color_img_idx
 
-blurred_image = blurred_image / np.max(blurred_image)
+blurred_image_2 = blurred_image_2 / np.max(blurred_image_2)
 print("---{}s seconds---".format(time.time()-start_time))
-plt.imshow(blurred_image)
+
+images = np.hstack((blurred_image, blurred_image_2))
+
+# Show images
+cv2.namedWindow('simulation', cv2.WINDOW_AUTOSIZE)
+cv2.imshow('simulation', images)
+cv2.waitKey(0)
