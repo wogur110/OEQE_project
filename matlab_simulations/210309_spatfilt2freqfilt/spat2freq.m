@@ -11,7 +11,7 @@ roaddepthmap=imread('imageset/roaddepthmap.png');
 roaddepthmap=rgb2gray(roaddepthmap);
 roaddepthmap=imresize(roaddepthmap,0.2);
 res_road=[size(roadimage,1) size(roadimage,2)];
-
+PQ = paddedsize(res_road);
 %% point spread function 
 b = @(distance) pupil_diameter * abs(eye_length*(1/eye_focal_length - 1/distance)-1);
 psf = @(c,r,d) 2/(pi() * (c * b(d))^2) * exp(-2*r^2/(c * b(d))^2);
@@ -23,23 +23,25 @@ wx = -floor(Res_window(2) / 2) * wdx : wdx : floor(Res_window(2) / 2) * wdx;
 wy = -floor(Res_window(1) / 2) * wdy : wdy : floor(Res_window(1) / 2) * wdy;
 window_radius = floor(Res_window(2) / 2) * wdx;
 [WX, WY] = meshgrid(wx,wy);
-h = double(zeros(res_road(1), res_road(2), 3));
+f = double(zeros(res_road(1), res_road(2)));
 image = double(zeros(res_road(1),res_road(2), 3));
 tic
 for n = 0:255 
     d = (256-n)*10*mm; %Convert depth image to real depth
+    Window = zeros(Res_window);
+    if b(d) < 5e-06     %If b(d) is too small and cannot calculate psf -> Window is delta function
+        %disp(n);
+        Window(floor(Res_window(1) / 2) + 1, floor(Res_window(2) / 2) + 1) = 1; % delta function
+    else
+        Window = WX.^2 + WY.^2 <= window_radius^2;
+        Window = Window.*psf(1,sqrt(WX.^2+WY.^2), d);
+        Window = Window / sum(Window, 'all');   % psf function
+    end
+    H = freqz2(Window, PQ(1), PQ(2));
+    H1 = ifftshift(H);
     for i = 1:3
-        h(:,:,i) = roadimage(:,:,i) .* double(roaddepthmap==n);
-        Window = zeros(Res_window);
-        if b(d) < 5e-06     %If b(d) is too small and cannot calculate psf -> Window is delta function
-            %disp(n);
-            Window(floor(Res_window(1) / 2) + 1, floor(Res_window(2) / 2) + 1) = 1; % delta function
-        else
-            Window = WX.^2 + WY.^2 <= window_radius^2;
-            Window = Window.*psf(1,sqrt(WX.^2+WY.^2), d);
-            Window = Window / sum(Window, 'all');   % psf function
-        end
-        image(:,:,i) = image(:,:,i) + double(conv2(h(:,:,i), Window, 'same'));  %Convolution
+        f(:,:) = roadimage(:,:,i) .* double(roaddepthmap==n);
+        image(:,:,i) = image(:,:,i) + double(dftfilt(f, H1));  %Convolution
     end
 end
 
@@ -47,11 +49,10 @@ normalize_factor = max(image,[],'all');
 image = image / normalize_factor;
 toc
 %% image plotting
-figure(1);
-subplot(1,2,1);
-imshow(roadimage);
-title('original image');
-subplot(1,2,2);
-imshow(image);
-title('blurred image');
-imwrite(image, ['result.png']);
+% figure(1);
+% subplot(1,2,1);
+% imshow(roadimage);
+% title('original image');
+% subplot(1,2,2);
+% imshow(image);
+% title('blurred image');
