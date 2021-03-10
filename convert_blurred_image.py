@@ -121,7 +121,7 @@ def convert_pupil_to_realsense(theta, phi) :
     return converted_theta, converted_phi
 
 
-def blurring_image(color_img, depth_img, gaze_depth) :
+def blurring_image(color_img, depth_img, gaze_depth):
     focal_length = 1 / (1/(gaze_depth/1000.0) + 1/eye_length)
     c = 1   #coefficient for gaussian psf
     color_img_list = []
