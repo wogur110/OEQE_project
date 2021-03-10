@@ -137,7 +137,7 @@ def blurring_image(color_img, depth_img, gaze_depth):
     percentiles = np.linspace(0,100,num_color_img_list+1)
     depth_bound_list = np.percentile(depth_list, percentiles)
 
-    for idx in range(num_color_img_list) :
+    for idx in range(num_color_img_list):
         pixel_select = np.ones_like(depth_img)
         pixel_select[depth_img < depth_bound_list[idx]] = 0
         pixel_select[depth_img >= depth_bound_list[idx+1]] = 0
