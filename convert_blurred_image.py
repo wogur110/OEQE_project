@@ -21,7 +21,7 @@ import math
 import time
 import scipy.io
 from sklearn.linear_model import LinearRegression
-from scipy import signal
+from scipy import fftpack
 
 import screeninfo
 
@@ -62,7 +62,7 @@ eye_length = 24e-3
 eye_relief = 1e-1
 res_window = 640,480
 window_size = 6.4e-3, 4.8e-3
-num_color_img_list = 32
+num_color_img_list = 8
 
 # Convert matrix default setting
 convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341, 0.7817]])
@@ -144,12 +144,26 @@ def get_dft(gray_image) :
 def get_idft(fshift) :
     f = np.fft.ifftshift(fshift)
     gray_image = np.fft.ifft2(f)
-    return np.abs(gray_image)
+    return np.real(gray_image)
+
+def get_compensate(image, kernel) :
+    DFT_image = get_dft(image)
+    DFT_kernel = get_dft(kernel)
+
+    f_compensate = DFT_image / DFT_kernel
+    f_compensate[np.isnan(f_compensate)] = 0
+
+    compensate = get_idft(f_compensate)
+    compensate[np.isnan(compensate)] = 0
+
+    compensate /= 1e17
+    
+    return compensate    
 
 
 def blurring_image(color_img, depth_img, gaze_depth) :
     focal_length = 1 / (1/(gaze_depth) + 1/eye_length)
-    c = 1   #coefficient for gaussian psf
+    c = 0.3  #coefficient for gaussian psf
     color_img_list = []
     color_img = color_img.astype(float)
     depth_img = depth_img.astype(float)
@@ -185,25 +199,26 @@ def blurring_image(color_img, depth_img, gaze_depth) :
     for color_img_idx, depth_idx in color_img_list :
         #b = pupil_diameter * abs(eye_length * (1/focal_length - 1 / depth_idx) - 1) #wrong!
         b = (eye_focal_length / (accomodation_depth - eye_focal_length)) * pupil_diameter * abs(depth_idx - accomodation_depth) / depth_idx
-        kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
-        kernel[radius > window_size[1]/2 /res_window[1] * 21] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
-        if np.sum(kernel) == 0 :    
+
+        kernel = np.zeros_like(color_img_idx[:,:,0])
+        if b == 0 :
             kernel[res_window[1]//2, res_window[0]//2] = 1
-            
+        else :
+            kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
+            kernel[radius > window_size[1]/2 /res_window[1] * 21] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
+
+        if np.sum(kernel) == 0 :    
+            kernel[res_window[1]//2, res_window[0]//2] = 1            
         else :
             kernel = kernel / np.sum(kernel)
 
         blurred_image += cv2.filter2D(color_img_idx, -1, kernel) #wrong!
-        # R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
-        # DFT_R_img_idx, DFT_G_img_idx, DFT_B_img_idx = get_dft(R_img_idx), get_dft(G_img_idx), get_dft(B_img_idx)
-        # DFT_kernel = get_dft(kernel)
+        #R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
 
-        # f_compensate_R, f_compensate_G, f_compensate_B =  DFT_R_img_idx/DFT_kernel, DFT_G_img_idx/DFT_kernel, DFT_B_img_idx/DFT_kernel
-        # compensate_R, compensate_G, compensate_B = get_idft(f_compensate_R), get_idft(f_compensate_G), get_idft(f_compensate_B)
+        #compensate_R, compensate_G, compensate_B = get_compensate(R_img_idx, kernel), get_compensate(G_img_idx, kernel), get_compensate(B_img_idx, kernel)
 
-        # blurred_image += np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
+        #blurred_image += np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
 
-        #breakpoint()
         # blurred_image += color_img_idx
         # print("depth idx : ", depth_idx)
         # print("kernel max :", kernel.max())
@@ -212,10 +227,10 @@ def blurring_image(color_img, depth_img, gaze_depth) :
     pixel_select[depth_img == 0] = 1
     pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
     color_img_zero_depth = color_img * pixel_select
-    # blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
+    blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
 
-    blurred_image = blurred_image / np.max(blurred_image)
-
+    blurred_image = blurred_image / np.max(blurred_image)    
+    
     return blurred_image
 
 
@@ -311,17 +326,21 @@ if __name__ == "__main__":
 
 
             # Show images
-            cv2.namedWindow('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN)
+            #cv2.namedWindow('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN)
+            cv2.namedWindow('Convert_blurred_image', cv2.WINDOW_AUTOSIZE)
             cv2.resizeWindow("Convert_blurred_image", resolution[0], resolution[1])
             cv2.moveWindow('Convert_blurred_image', screen.x - 1, screen.y - 1)
-            cv2.setWindowProperty('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            #cv2.setWindowProperty('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
             display_blurred_image = cv2.copyMakeBorder( blurred_image, int((resolution[1]-blurred_image.shape[0])/2), int((resolution[1]-blurred_image.shape[0])/2), int((resolution[0]-blurred_image.shape[1])/2), int((resolution[0]-blurred_image.shape[1])/2), 0)
 
             cv2.imshow('Convert_blurred_image', display_blurred_image)
 
+            # Stack both images horizontally
+            images = np.hstack((color_image, depth_colormap))
+
             cv2.namedWindow('original_image', cv2.WINDOW_AUTOSIZE)
-            cv2.imshow('original_image', color_image)
+            cv2.imshow('original_image', images)
             cv2.waitKey(1)
 
             sub_1_3d.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
