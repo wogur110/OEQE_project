@@ -62,7 +62,7 @@ eye_length = 24e-3
 eye_relief = 1e-1
 res_window = 640,480
 window_size = 6.4e-3, 4.8e-3
-num_color_img_list = 8
+num_color_img_list = 32
 
 # Convert matrix default setting
 convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341, 0.7817]])
@@ -89,8 +89,8 @@ def make_convert_matrix(sub):
         sub.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
         topic,msg_1 =  sub.recv_multipart()
         message_1 = loads(msg_1)
-        theta_2 = message_1['theta']
-        phi_2 = message_1['phi']
+        theta_2 = message_1[b'theta']
+        phi_2 = message_1[b'phi']
         sub.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
 
         x_2 = np.sin(theta_2) * np.cos(phi_2)
@@ -170,6 +170,8 @@ def blurring_image(color_img, depth_img, gaze_depth) :
 
         depth_select_list = depth_img[pixel_select == 1]
         depth_idx = np.mean(depth_select_list)
+        if int(gaze_depth * 1000) in depth_select_list :
+            depth_idx = int(gaze_depth * 1000)
 
         pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
         color_img_idx = color_img * pixel_select
@@ -203,14 +205,14 @@ def blurring_image(color_img, depth_img, gaze_depth) :
 
         #breakpoint()
         # blurred_image += color_img_idx
-        print("depth idx : ", depth_idx)
-        print("kernel max :", kernel.max())
+        # print("depth idx : ", depth_idx)
+        # print("kernel max :", kernel.max())
 
     pixel_select = np.zeros_like(depth_img)
     pixel_select[depth_img == 0] = 1
     pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
     color_img_zero_depth = color_img * pixel_select
-    blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
+    # blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
 
     blurred_image = blurred_image / np.max(blurred_image)
 
@@ -275,8 +277,8 @@ if __name__ == "__main__":
                 continue
 
             message_1 = loads(msg_1)
-            theta = message_1['theta']
-            phi = message_1['phi']
+            theta = message_1[b'theta']
+            phi = message_1[b'phi']
 
             # Convert images to numpy arrays
             depth_image = np.asanyarray(depth_frame.get_data())
@@ -303,9 +305,9 @@ if __name__ == "__main__":
             blurred_image = blurring_image(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
             blurred_image = cv2.circle(blurred_image, (point_x, point_y), 3, (0,255,0), -1)
 
-            print("time : ", round(current_time - time_0, 4))
-            print("theta, phi : ", theta, phi)
-            print("position(x,y), depth : ", point_x, point_y, depth_image[point_y][point_x], "\n")
+            # print("time : ", round(current_time - time_0, 4))
+            # print("theta, phi : ", theta, phi)
+            # print("position(x,y), depth : ", point_x, point_y, depth_image[point_y][point_x], "\n")
 
 
             # Show images
