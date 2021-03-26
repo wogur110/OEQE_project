@@ -21,11 +21,17 @@ import math
 import time
 import scipy.io
 from sklearn.linear_model import LinearRegression
+from scipy import signal
 
 import screeninfo
 
+#Get ScreenInfo
+screen_id = 0
+screen = screeninfo.get_monitors()[screen_id]
+resolution = [screen.width, screen.height]
+
 ## Setting for realsense
-REALSENSE_CAMERA = "L515" #D435 / L515
+REALSENSE_CAMERA = "D435" #D435 / L515
 
 # Camera setting and tracking setting
 if REALSENSE_CAMERA == "D435" :
@@ -53,8 +59,9 @@ req_port = "50020" # same as in the pupil remote gui
 ## Setting for blurring image
 pupil_diameter = 2e-3
 eye_length = 24e-3
-res_window = 21,21
-window_size = 0.2e-3, 0.2e-3
+eye_relief = 1e-1
+res_window = 640,480
+window_size = 6.4e-3, 4.8e-3
 num_color_img_list = 8
 
 # Convert matrix default setting
@@ -64,8 +71,8 @@ convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341
 def make_convert_matrix(sub):
     """
     front side = input degree is 184
-    (x_1, y_1, z_1): world coordinate 
-    (x_2, y_2, z_2): viewing coordinate (pupil camera coordinate) 
+    (x_1, y_1, z_1): world coordinate
+    (x_2, y_2, z_2): viewing coordinate (pupil camera coordinate)
     """
     coord_1 = None
     coord_2 = None
@@ -100,10 +107,10 @@ def make_convert_matrix(sub):
             coord_2 = np.append(coord_2, [[x_2, y_2, z_2]], axis=0)
 
         degree = input("type observed degree:")
-    
+
     # coord_1 = np.array([[-0.5,	0,	0.866025404],[-0.342020143,	0,	0.939692621],[-0.173648178,	0,	0.984807753],[0,	0,	1],[0.173648178,	0,	0.984807753],[0.342020143,	0,	0.939692621],[0.5,	0,	0.866025404]])
     # coord_2 = np.array([[-0.420787921,	-0.390899842,	0.818617639],[-0.32087076,	-0.557559388,	0.765617061],[-0.137999648,	-0.649991026,	0.747307007],[0.083080865,	-0.662271994,	0.74464312],[0.274478632,	-0.610046409,	0.743306706],[0.418590941,	-0.480357372,	0.770738879],[0.460415755,	-0.314987365,	0.829939933]])
-    
+
     print("coord_1 : ", coord_1)
     print("coord_2 : ", coord_2)
 
@@ -113,7 +120,7 @@ def make_convert_matrix(sub):
 
     convert_matrix = np.array([model_x.coef_, model_y.coef_, model_z.coef_])
     return convert_matrix
-       
+
 
 def convert_pupil_to_realsense(theta, phi) :
     x = np.sin(theta) * np.cos(phi)
@@ -126,8 +133,19 @@ def convert_pupil_to_realsense(theta, phi) :
     converted_x, converted_y, converted_z = converted_coord
     converted_theta = np.arctan(converted_y / converted_z)
     converted_phi = np.arctan(converted_x / converted_z)
-    
+
     return converted_theta, converted_phi
+
+def get_dft(gray_image) :
+    f = np.fft.fft2(gray_image)
+    fshift = np.fft.fftshift(f)
+    return fshift
+
+def get_idft(fshift) :
+    f = np.fft.ifftshift(fshift)
+    gray_image = np.fft.ifft2(f)
+    return np.abs(gray_image)
+
 
 def blurring_image(color_img, depth_img, gaze_depth) :
     focal_length = 1 / (1/(gaze_depth) + 1/eye_length)
@@ -137,7 +155,7 @@ def blurring_image(color_img, depth_img, gaze_depth) :
     depth_img = depth_img.astype(float)
     blurred_image = np.zeros_like(color_img)
 
-    x,y = np.meshgrid(np.linspace(-window_size[0]/2, window_size[0]/2, res_window[0]), np.linspace(-window_size[1]/2, window_size[1]/2, res_window[1]))    
+    x,y = np.meshgrid(np.linspace(-window_size[0]/2, window_size[0]/2, res_window[0]), np.linspace(-window_size[1]/2, window_size[1]/2, res_window[1]))
     radius = np.sqrt(x*x + y*y)
 
     depth_list = depth_img[depth_img > 0]
@@ -149,33 +167,50 @@ def blurring_image(color_img, depth_img, gaze_depth) :
         pixel_select = np.ones_like(depth_img)
         pixel_select[depth_img < depth_bound_list[idx]] = 0
         pixel_select[depth_img >= depth_bound_list[idx+1]] = 0
-        
+
         depth_select_list = depth_img[pixel_select == 1]
         depth_idx = np.mean(depth_select_list)
 
         pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
         color_img_idx = color_img * pixel_select
 
-        color_img_list.append((color_img_idx, depth_idx / 1000.0))        
+        color_img_list.append((color_img_idx, depth_idx / 1000.0))
 
     
-    for color_img_idx, depth_idx in color_img_list :
-        b = pupil_diameter * abs(eye_length * (1/focal_length - 1 / depth_idx) - 1) 
-        kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
-        kernel[radius > window_size[0]/2] = 0
-        kernel = kernel / np.sum(kernel)
-        
-        #kernel =np .reshape(kernel, kernel.shape + (1,))
-        #blurred_image += scipy.signal.convolve(color_img_idx, kernel, mode = 'same', method = 'auto')
-        #blurred_image += cv2.filter2D(color_img_idx, -1, kernel)
-        blurred_image += color_img_idx
-        print("depth idx : ", depth_idx)
+    accomodation_depth = gaze_depth
+    eye_focal_length = 1 / (1 / accomodation_depth + 1 / eye_length)
 
-    pixel_select = np.zeros_like(depth_img)  
+    for color_img_idx, depth_idx in color_img_list :
+        #b = pupil_diameter * abs(eye_length * (1/focal_length - 1 / depth_idx) - 1) #wrong!
+        b = (eye_focal_length / (accomodation_depth - eye_focal_length)) * pupil_diameter * abs(depth_idx - accomodation_depth) / depth_idx
+        kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
+        kernel[radius > window_size[1]/2 /res_window[1] * 21] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
+        if np.sum(kernel) == 0 :    
+            kernel[res_window[1]//2, res_window[0]//2] = 1
+            
+        else :
+            kernel = kernel / np.sum(kernel)
+
+        blurred_image += cv2.filter2D(color_img_idx, -1, kernel) #wrong!
+        # R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
+        # DFT_R_img_idx, DFT_G_img_idx, DFT_B_img_idx = get_dft(R_img_idx), get_dft(G_img_idx), get_dft(B_img_idx)
+        # DFT_kernel = get_dft(kernel)
+
+        # f_compensate_R, f_compensate_G, f_compensate_B =  DFT_R_img_idx/DFT_kernel, DFT_G_img_idx/DFT_kernel, DFT_B_img_idx/DFT_kernel
+        # compensate_R, compensate_G, compensate_B = get_idft(f_compensate_R), get_idft(f_compensate_G), get_idft(f_compensate_B)
+
+        # blurred_image += np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
+
+        #breakpoint()
+        # blurred_image += color_img_idx
+        print("depth idx : ", depth_idx)
+        print("kernel max :", kernel.max())
+
+    pixel_select = np.zeros_like(depth_img)
     pixel_select[depth_img == 0] = 1
     pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
     color_img_zero_depth = color_img * pixel_select
-    #blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
+    blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
 
     blurred_image = blurred_image / np.max(blurred_image)
 
@@ -183,10 +218,6 @@ def blurring_image(color_img, depth_img, gaze_depth) :
 
 
 if __name__ == "__main__":
-    #Get ScreenInfo
-    screen_id = 0
-    is_color = False
-    screen = screeninfo.get_monitors()[screen_id]
 
     # Configure depth and color streams
     pipeline = rs.pipeline()
@@ -203,7 +234,7 @@ if __name__ == "__main__":
     pipeline.start(config)
 
     # Start connecting pupil tracker
-    context = zmq.Context()    
+    context = zmq.Context()
     req = context.socket(zmq.REQ)   #open a req port to talk to pupil
     req.connect("tcp://%s:%s" %(addr,req_port))
     req.send(b'SUB_PORT')   # ask for the sub port
@@ -213,17 +244,17 @@ if __name__ == "__main__":
     sub_1_3d = context.socket(zmq.SUB)
     sub_1_3d.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
     sub_1_3d.setsockopt(zmq.SUBSCRIBE, b'pupil.1.3d')
-    
+
     need_calculate = input("Start Calculating convert matrix?(Y/n) : ")
 
     if (need_calculate.upper() == "Y") :
-        convert_matrix = make_convert_matrix(sub_1_3d)    
+        convert_matrix = make_convert_matrix(sub_1_3d)
     print("convert matrix : ", convert_matrix)
     np.save('./convert_matrix',convert_matrix)
 
     input("Start convert blurred image(press enter)")
     time_0 = time.time()
-    
+
     # Start convert blurred image
     try:
         while True:
@@ -232,7 +263,7 @@ if __name__ == "__main__":
             # Collect Data from pupil_tracker &  Wait for a coherent pair of frames: depth and color
             sub_1_3d.connect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
             topic,msg_1 =  sub_1_3d.recv_multipart() # pupil tracker (maximum 120Hz)
-            
+
             frames = pipeline.wait_for_frames() # realsense (maximum 30Hz)
 
             aligned_frames = align.process(frames)
@@ -245,7 +276,7 @@ if __name__ == "__main__":
 
             message_1 = loads(msg_1)
             theta = message_1['theta']
-            phi = message_1['phi']                     
+            phi = message_1['phi']
 
             # Convert images to numpy arrays
             depth_image = np.asanyarray(depth_frame.get_data())
@@ -265,7 +296,7 @@ if __name__ == "__main__":
 
             depth_colormap = cv2.circle(depth_colormap, (point_x, point_y), 3, (0,255,0), -1)
             text = "depth : " + str(depth_image[point_y][point_x]) + "mm"
-            depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+            depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
             color_image = cv2.circle(color_image, (point_x, point_y), 3, (0,255,0), -1)
 
@@ -276,16 +307,19 @@ if __name__ == "__main__":
             print("theta, phi : ", theta, phi)
             print("position(x,y), depth : ", point_x, point_y, depth_image[point_y][point_x], "\n")
 
-            # Stack images horizontally
-            # images = np.hstack((color_image, depth_colormap, blurred_image))
-            images = np.hstack((color_image, depth_colormap))
 
             # Show images
-            cv2.namedWindow('Convert_blurred_image', cv2.WINDOW_AUTOSIZE)
-
-            #6cv2.moveWindow('Convert_blurred_image', screen.x - 1, screen.y - 1)
+            cv2.namedWindow('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN)
+            cv2.resizeWindow("Convert_blurred_image", resolution[0], resolution[1])
+            cv2.moveWindow('Convert_blurred_image', screen.x - 1, screen.y - 1)
             cv2.setWindowProperty('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-            cv2.imshow('Convert_blurred_image', images)
+
+            display_blurred_image = cv2.copyMakeBorder( blurred_image, int((resolution[1]-blurred_image.shape[0])/2), int((resolution[1]-blurred_image.shape[0])/2), int((resolution[0]-blurred_image.shape[1])/2), int((resolution[0]-blurred_image.shape[1])/2), 0)
+
+            cv2.imshow('Convert_blurred_image', display_blurred_image)
+
+            cv2.namedWindow('original_image', cv2.WINDOW_AUTOSIZE)
+            cv2.imshow('original_image', color_image)
             cv2.waitKey(1)
 
             sub_1_3d.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
