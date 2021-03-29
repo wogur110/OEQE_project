@@ -23,6 +23,8 @@ import scipy.io
 from sklearn.linear_model import LinearRegression
 from scipy import fftpack
 
+from skimage import color, data, restoration
+
 import screeninfo
 
 #Get ScreenInfo
@@ -212,12 +214,16 @@ def blurring_image(color_img, depth_img, gaze_depth) :
         else :
             kernel = kernel / np.sum(kernel)
 
-        blurred_image += cv2.filter2D(color_img_idx, -1, kernel) #wrong!
-        #R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
+        #blurred_image += cv2.filter2D(color_img_idx, -1, kernel) #wrong!
 
-        #compensate_R, compensate_G, compensate_B = get_compensate(R_img_idx, kernel), get_compensate(G_img_idx, kernel), get_compensate(B_img_idx, kernel)
+        R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
 
-        #blurred_image += np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
+        compensate_R = restoration.wiener(R_img_idx, kernel, 0.01, clip=False)
+        compensate_G = restoration.wiener(G_img_idx, kernel, 0.01, clip=False)
+        compensate_B = restoration.wiener(B_img_idx, kernel, 0.01, clip=False)
+
+        compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
+        blurred_image += compensate_img
 
         # blurred_image += color_img_idx
         # print("depth idx : ", depth_idx)
@@ -292,8 +298,8 @@ if __name__ == "__main__":
                 continue
 
             message_1 = loads(msg_1)
-            theta = message_1[b'theta']
-            phi = message_1[b'phi']
+            theta = message_1['theta']
+            phi = message_1['phi']
 
             # Convert images to numpy arrays
             depth_image = np.asanyarray(depth_frame.get_data())
