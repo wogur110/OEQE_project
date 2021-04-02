@@ -46,10 +46,14 @@ RES = 640,480
 COLOR_CAMERA_MAX_THETA = 41 / 2.0 * (pi / 180)
 COLOR_CAMERA_MAX_PHI = 64 / 2.0 * (pi / 180)
 converted_theta, converted_phi = 0, 0
+#converted_theta, converted_phi = COLOR_CAMERA_MAX_THETA/2, 0
+#converted_theta, converted_phi = -3*COLOR_CAMERA_MAX_THETA/4, -COLOR_CAMERA_MAX_PHI/2
+
+target_intensity_sum = 1
 
 def full_blurring_image(color_img, depth_img, gaze_depth) :
     focal_length = 1 / (1/(gaze_depth) + 1/eye_length)
-    c = 0.5e+5 #coefficient for gaussian psf
+    c = 0.5e+4 #coefficient for gaussian psf
     color_img_list = []
     color_img = color_img.astype(float)
     depth_img = depth_img.astype(float)
@@ -90,9 +94,9 @@ def full_blurring_image(color_img, depth_img, gaze_depth) :
 
         R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
 
-        compensate_R = restoration.wiener(R_img_idx, kernel, 1e+1, clip=False)
-        compensate_G = restoration.wiener(G_img_idx, kernel, 1e+1, clip=False)
-        compensate_B = restoration.wiener(B_img_idx, kernel, 1e+1, clip=False)
+        compensate_R = restoration.wiener(R_img_idx, kernel, 1e+0, clip=False)
+        compensate_G = restoration.wiener(G_img_idx, kernel, 1e+0, clip=False)
+        compensate_B = restoration.wiener(B_img_idx, kernel, 1e+0, clip=False)
 
         compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
         blurred_image += compensate_img
@@ -106,8 +110,10 @@ def full_blurring_image(color_img, depth_img, gaze_depth) :
     color_img_zero_depth = color_img * pixel_select
     blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
 
-    blurred_image = blurred_image / np.max(blurred_image)
-    blurred_image = np.clip(blurred_image,0,1)
+    blurred_image = np.clip(blurred_image,0,np.max(blurred_image))
+    blurred_image = blurred_image / np.sum(blurred_image) * target_intensity_sum / 255.0
+    #blurred_image = blurred_image / np.max(blurred_image)
+    #blurred_image = np.clip(blurred_image,0,1)
     return blurred_image
 
 
@@ -197,10 +203,13 @@ if __name__ == "__main__":
     color_image = cv2.resize(color_image, dsize = RES, interpolation = cv2.INTER_AREA)
     depth_image = cv2.resize(depth_image, dsize = RES, interpolation = cv2.INTER_AREA)
 
-    depth_image = (256 - depth_image) * 10 #depth : 10mm ~ 256*10 = 2560mm
+    depth_image = 1.0 / (depth_image + 1) * 20 * 1000 #depth : 10mm ~ 256*10 = 2560mm
 
     # Apply colormap on depth image (image must be converted to 8-bit per pixel first)
     depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+
+    # Calculate target intensity sum
+    target_intensity_sum = np.sum(color_image)
 
     # Find tracking point
     H, W = color_image.shape[0], color_image.shape[1]
@@ -210,7 +219,10 @@ if __name__ == "__main__":
     point_x = np.clip(point_x, 0, W-1)
 
     full_blurred_image = full_blurring_image(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
+    full_blurred_image = cv2.circle(full_blurred_image, (point_x, point_y), 3, (0,255,0), -1)
     cv2.imwrite("Dataset/full_blurred_img.png", (full_blurred_image * 255).astype(int))
+
+    breakpoint()
 
     f = open("Dataset/simulation_result.txt", "w")
 
