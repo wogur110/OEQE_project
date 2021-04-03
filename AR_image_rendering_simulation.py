@@ -38,7 +38,7 @@ eye_length = 24e-3
 eye_relief = 1e-1
 kernel_radius_pixel = 21
 #num_color_img_list = 8    # max num in simulation : 256
-num_color_img_list_list = [1,2,4,8,16,32,64,128,256,512,1024,2048]
+num_color_img_list_list = [1,2,4,8,16,32,64,128,256,512,1024,2048,4096]
 #num_color_img_list_list = [10000]
 
 #simulation configure
