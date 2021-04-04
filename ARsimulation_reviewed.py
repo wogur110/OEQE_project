@@ -33,7 +33,7 @@ eye_relief=1e-1
 res_kernel=21
 
 #setting for reduced wiener deconvolution
-list_of_slice_numbers=[1,2,4,8,16,32,64,128,256,512,1024,2048,4096]
+list_of_slice_numbers=[1,2,4,8,16,32,64,128]
 
 # setting for realsense2 camera
 COLOR_CAMERA_MAX_THETA = 41 / 2.0 * (pi / 180)
@@ -59,12 +59,12 @@ def full_wiener_deconvolution(color_img, depth_img, gaze_depth):
     x,y=np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2-1,RES[0]), np.linspace(-RES[1]//2,RES[1]//2-1,RES[1]))
     radius=np.sqrt(x*x+y*y)
 
-    depth_list=np.unique(depth_img[depth_img>0])
+    depths=np.unique(depth_img[depth_img>0])
     sliced_color_imgs=[]
 
-    for depth in depth_list:
+    for depth in depths:
         pixel_select=np.zeros_like(depth_img)
-        pixel_select[depth_img==depth]=1 # indexing을 쓰는 거지.
+        pixel_select[depth_img==depth]=1
         pixel_select=np.stack((pixel_select,pixel_select,pixel_select), axis=2)
         color_img_slice = color_img * pixel_select
         sliced_color_imgs.append((color_img_slice, depth/1000.0))
@@ -73,7 +73,7 @@ def full_wiener_deconvolution(color_img, depth_img, gaze_depth):
 
     for color_img_slice, depth in sliced_color_imgs:
         b = (eye_focal_length/(gaze_depth-eye_focal_length))* pupil_diameter * abs(depth - gaze_depth) / depth # blur diameter
-        kernel = np.zeros_like(color_img_idx[:,:,0]) # must be the same size with image for modifying if is_real in skimage.wiener is True
+        kernel = np.zeros_like(color_img_slice[:,:,0]) # must be the same size with image for modifying if is_real in skimage.wiener is True
         if b==0:
             kernel[RES[1]//2, RES[0]//2] = 1 # delta function
         else:
@@ -86,11 +86,11 @@ def full_wiener_deconvolution(color_img, depth_img, gaze_depth):
         else:
             kernel=kernel/np.sum(kernel)
 
-        R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
+        R_img_slice, G_img_slice, B_img_slice = color_img_slice[:,:,0], color_img_slice[:,:,1], color_img_slice[:,:,2]
         
-        compensate_R = restroation.wiener(R_img_idx, kernel, 1e+0, clip=False) # why is balance 1e+0? why is clip False?
-        compensate_G = restroation.wiener(G_img_idx, kernel, 1e+0, clip=False)
-        compensate_B = restroation.wiener(B_img_idx, kernel, 1e+0, clip=False)
+        compensate_R = restoration.wiener(R_img_slice, kernel, 1e+0, clip=False) # why is balance 1e+0? why is clip False?
+        compensate_G = restoration.wiener(G_img_slice, kernel, 1e+0, clip=False)
+        compensate_B = restoration.wiener(B_img_slice, kernel, 1e+0, clip=False)
 
         compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis=2)
         deconvolved_img += compensate_img
@@ -123,7 +123,7 @@ def reduced_wiener_deconvolution(color_img, depth_img, gaze_depth, number_of_sli
 
     depths = depth_img[depth_img>0]
     percentiles = np.linspace(0,100,number_of_slices+1) # total 
-    bounds_of_depth = np.percentile(depth_list, percentiles, interpolation='nearest')
+    bounds_of_depth = np.percentile(depths, percentiles, interpolation='nearest')
 
     depths = np.unique(depths)
 
@@ -153,7 +153,7 @@ def reduced_wiener_deconvolution(color_img, depth_img, gaze_depth, number_of_sli
 
     for color_img_slice, depth in sliced_color_imgs:
         b = (eye_focal_length/(gaze_depth-eye_focal_length))* pupil_diameter * abs(depth - gaze_depth) / depth # blur diameter
-        kernel = np.zeros_like(color_img_idx[:,:,0]) # must be the same size with image for modifying if is_real in skimage.wiener is True
+        kernel = np.zeros_like(color_img_slice[:,:,0]) # must be the same size with image for modifying if is_real in skimage.wiener is True
         if b==0:
             kernel[RES[1]//2, RES[0]//2] = 1 # delta function
         else:
@@ -166,11 +166,11 @@ def reduced_wiener_deconvolution(color_img, depth_img, gaze_depth, number_of_sli
         else:
             kernel=kernel/np.sum(kernel)
 
-        R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
+        R_img_slice, G_img_slice, B_img_slice = color_img_slice[:,:,0], color_img_slice[:,:,1], color_img_slice[:,:,2]
         
-        compensate_R = restroation.wiener(R_img_idx, kernel, 1e+0, clip=False) # why is balance 1e+0? why is clip False?
-        compensate_G = restroation.wiener(G_img_idx, kernel, 1e+0, clip=False)
-        compensate_B = restroation.wiener(B_img_idx, kernel, 1e+0, clip=False)
+        compensate_R = restoration.wiener(R_img_slice, kernel, 1e+0, clip=False) # why is balance 1e+0? why is clip False?
+        compensate_G = restoration.wiener(G_img_slice, kernel, 1e+0, clip=False)
+        compensate_B = restoration.wiener(B_img_slice, kernel, 1e+0, clip=False)
 
         compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis=2)
         deconvolved_img += compensate_img
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     point_y = np.clip(point_y, 0, H-1)
     point_x = np.clip(point_x, 0, W-1)
 
-    reconstructed_image_full = wiener_deconvolve(color_image, depth_image, depth_image[point_y][point_x]/1000.0)
+    reconstructed_image_full = full_wiener_deconvolution(color_image, depth_image, depth_image[point_y][point_x]/1000.0)
     cv2.imwrite("Dataset/wiener_img.png", (reconstructed_image_full*255).astype(int))
 
     f = open("Dataset/simulation_result.txt","w")
