@@ -22,6 +22,8 @@ import time
 import scipy.io
 from sklearn.linear_model import LinearRegression
 
+from skimage import color, data, restoration, metrics
+
 import screeninfo
 
 #Get ScreenInfo
@@ -58,8 +60,10 @@ req_port = "50020" # same as in the pupil remote gui
 ## Setting for blurring image
 pupil_diameter = 2e-3
 eye_length = 24e-3
-res_window = 21,21
-window_size = 0.2e-3, 0.2e-3
+eye_relief = 1e-1
+kernel_radius_pixel = 21
+#res_window = 21,21
+#window_size = 0.2e-3, 0.2e-3
 num_color_img_list = 8
 
 # Convert matrix default setting
@@ -135,47 +139,76 @@ def convert_pupil_to_realsense(theta, phi) :
     return converted_theta, converted_phi
 
 
-def blurring_image(color_img, depth_img, gaze_depth) :
+def inverse_filtering(color_img, depth_img, gaze_depth) :
     focal_length = 1 / (1/(gaze_depth) + 1/eye_length)
-    c = 1   #coefficient for gaussian psf
+    c = 1e+4   #coefficient for gaussian psf
     color_img_list = []
     color_img = color_img.astype(float)
     depth_img = depth_img.astype(float)
     blurred_image = np.zeros_like(color_img)
 
-    x,y = np.meshgrid(np.linspace(-window_size[0]/2, window_size[0]/2, res_window[0]), np.linspace(-window_size[1]/2, window_size[1]/2, res_window[1]))
+    # Calculate target intensity sum
+    target_intensity_sum = np.sum(color_img)
+    
+    RES = COLOR_CAMERA_RES  #resolution of color_img, detph_img
+    x,y = np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2 - 1, RES[0]), np.linspace(-RES[1]//2, RES[1]//2 - 1, RES[1]))
     radius = np.sqrt(x*x + y*y)
 
     depth_list = depth_img[depth_img > 0]
 
     percentiles = np.linspace(0,100,num_color_img_list+1)
-    depth_bound_list = np.percentile(depth_list, percentiles)
+    depth_bound_list = np.percentile(depth_list, percentiles, interpolation='nearest')
+
+    depth_list = np.unique(depth_list)
 
     for idx in range(num_color_img_list) :
-        pixel_select = np.ones_like(depth_img)
-        pixel_select[depth_img < depth_bound_list[idx]] = 0
-        pixel_select[depth_img >= depth_bound_list[idx+1]] = 0
+        pixel_select = np.zeros_like(depth_img)
+        for depth in depth_list :
+            if depth_bound_list[idx] <= depth and depth < depth_bound_list[idx+1] :
+                pixel_select[depth_img == depth] = 1
+        if idx == num_color_img_list - 1 :
+            pixel_select[depth_img == depth_bound_list[idx+1]] = 1
 
         depth_select_list = depth_img[pixel_select == 1]
+        if len(depth_select_list) == 0 :
+            continue
         depth_idx = np.mean(depth_select_list)
+        #if int(gaze_depth * 1000) in depth_select_list :
+        #    depth_idx = int(gaze_depth * 1000)
 
         pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
         color_img_idx = color_img * pixel_select
 
         color_img_list.append((color_img_idx, depth_idx / 1000.0))
 
+    eye_focal_length = 1 / (1 / gaze_depth + 1 / eye_length)
 
     for color_img_idx, depth_idx in color_img_list :
-        b = pupil_diameter * abs(eye_length * (1/focal_length - 1 / depth_idx) - 1)
-        kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
-        kernel[radius > window_size[0]/2] = 0
-        kernel = kernel / np.sum(kernel)
+        b = (eye_focal_length / (gaze_depth - eye_focal_length)) * pupil_diameter * abs(depth_idx - gaze_depth) / depth_idx
 
-        #kernel =np .reshape(kernel, kernel.shape + (1,))
-        #blurred_image += scipy.signal.convolve(color_img_idx, kernel, mode = 'same', method = 'auto')
-        blurred_image += cv2.filter2D(color_img_idx, -1, kernel)
-        # blurred_image += color_img_idx
-        print("depth idx : ", depth_idx)
+        kernel = np.zeros_like(color_img_idx[:,:,0])
+        if b == 0 :
+            kernel[RES[1]//2, RES[0]//2] = 1
+        else :
+            kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
+            kernel[radius > kernel_radius_pixel] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
+
+        if np.sum(kernel) == 0 :    
+            kernel[res_window[1]//2, res_window[0]//2] = 1            
+        else :
+            kernel = kernel / np.sum(kernel)
+
+        R_img_idx, G_img_idx, B_img_idx = color_img_idx[:,:,0], color_img_idx[:,:,1], color_img_idx[:,:,2]
+
+        compensate_R = restoration.wiener(R_img_idx, kernel, 1e+0, clip=False)
+        compensate_G = restoration.wiener(G_img_idx, kernel, 1e+0, clip=False)
+        compensate_B = restoration.wiener(B_img_idx, kernel, 1e+0, clip=False)
+
+        compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
+        blurred_image += compensate_img
+
+        #print("depth idx : ", depth_idx)
+        #print("kernel max :", kernel.max())
 
     pixel_select = np.zeros_like(depth_img)
     pixel_select[depth_img == 0] = 1
@@ -183,7 +216,9 @@ def blurring_image(color_img, depth_img, gaze_depth) :
     color_img_zero_depth = color_img * pixel_select
     blurred_image += color_img_zero_depth  #just add zero depth pixel to blurred_image
 
-    blurred_image = blurred_image / np.max(blurred_image)
+    blurred_image = np.clip(blurred_image,0,np.max(blurred_image))
+    blurred_image = blurred_image / np.sum(blurred_image) * target_intensity_sum / 255.0
+    blurred_image = np.clip(blurred_image,0,1)
 
     return blurred_image
 
@@ -271,7 +306,7 @@ if __name__ == "__main__":
 
             color_image = cv2.circle(color_image, (point_x, point_y), 3, (0,255,0), -1)
 
-            blurred_image = blurring_image(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
+            blurred_image = inverse_filtering(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
             blurred_image = cv2.circle(blurred_image, (point_x, point_y), 3, (0,255,0), -1)
 
             print("time : ", round(current_time - time_0, 4))
