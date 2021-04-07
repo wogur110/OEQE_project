@@ -111,13 +111,14 @@ def reduced_wiener_deconvolution(color_img, depth_img, gaze_depth, number_of_sli
     """
     slice color image by 'number_of_slices' in depth image. Create corresponding PSF on each slice. Apply wiener deconvolution on every slice and add up every slice. return normalized reconstructed image.
     """
-    focal_length = 1/ (1/gaze_depth + 1/eye_length)
+    eye_focal_length = 1/ (1/gaze_depth + 1/eye_length)
     c=1e+4 #coefficient for gaussian psf
     color_img_list=[]
     color_img=color_img.astype(float)
     depth_img=depth_img.astype(float)
     deconvolved_img=np.zeros_like(color_img)
-
+    mask=np.zeros_like(color_img)
+    edge = np.zeros_like(depth_img)
     x,y=np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2-1,RES[0]), np.linspace(-RES[1]//2,RES[1]//2-1,RES[1]))
     radius=np.sqrt(x*x+y*y)
 
@@ -144,13 +145,13 @@ def reduced_wiener_deconvolution(color_img, depth_img, gaze_depth, number_of_sli
             continue
         
         mean_of_depth = np.mean(masked_depth_img)
-        
+        edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
         pixel_select=np.stack((pixel_select,pixel_select,pixel_select), axis=2)
         color_img_slice = color_img * pixel_select
         sliced_color_imgs.append((color_img_slice, mean_of_depth/1000.0))
 
-    eye_focal_length = 1/(1/gaze_depth + 1/eye_length)
 
+    test_compensate_img_list = []
     for color_img_slice, depth in sliced_color_imgs:
         b = (eye_focal_length/(gaze_depth-eye_focal_length))* pupil_diameter * abs(depth - gaze_depth) / depth # blur diameter
         kernel = np.zeros_like(color_img_slice[:,:,0]) # must be the same size with image for modifying if is_real in skimage.wiener is True
@@ -173,20 +174,50 @@ def reduced_wiener_deconvolution(color_img, depth_img, gaze_depth, number_of_sli
         compensate_B = restoration.wiener(B_img_slice, kernel, 1e+0, clip=False)
 
         compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis=2)
+        test_compensate_img_list.append((depth, compensate_img))
+        
+        # deconvolved_img = cv2.addWeighted(deconvolved_img, alpha, compensate_img, (1-alpha), 0)
         deconvolved_img += compensate_img
 
     # just add original image if depth is zero
-    pixel_select = np.zeros_like(depth_img)
-    pixel_select[depth_img==0] = 1
-    pixel_select=np.stack((pixel_select, pixel_select, pixel_select), axis=2)
-    color_img_depth0 = color_img * pixel_select
-    deconvolved_img += color_img_depth0
+    # pixel_select = np.zeros_like(depth_img)
+    # pixel_select[depth_img==0] = 1
+    # pixel_select=np.stack((pixel_select, pixel_select, pixel_select), axis=2)
+    # color_img_depth0 = color_img * pixel_select
+    # deconvolved_img += color_img_depth0
+
     # clip negative values
     deconvolved_img = np.clip(deconvolved_img, 0, np.max(deconvolved_img))
-    deconvolved_img = deconvolved_img/np.sum(deconvolved_img) * np.sum(color_img) / 255.0 # make total brightness similar with original image
+    orig_sum = np.sum(deconvolved_img)
+    deconvolved_img = deconvolved_img/np.sum(deconvolved_img) * np.sum(color_img) /255.0 # make total brightness similar with original image
     deconvolved_img = np.clip(deconvolved_img,0,1)
+    edge = np.clip(edge, 0, 255).astype('uint8')
+    dilated = cv2.dilate(edge, np.ones((3, 3)))
+    dilated = np.stack((dilated, dilated, dilated), axis=2)
+    cv2.imshow('a',dilated)
+    cv2.waitKey(2000)
+    blurred_deconvolved_img = cv2.GaussianBlur(deconvolved_img, (11, 11), 0)
+    # blurred_deconvolved_img = np.zeros_like(deconvolved_img, dtype='uint8')
+    smoothed_deconvolved_img = np.where(dilated==np.array([255,255,255]), blurred_deconvolved_img, deconvolved_img)
+    cv2.imshow('d',smoothed_deconvolved_img)
+    cv2.waitKey(1000)
+    # cv2.imwrite("Dataset/edge_checked.png", (smoothed_deconvolved_img*255).astype(int))
+    cv2.imwrite("Dataset/smoothed.png",(smoothed_deconvolved_img*255).astype(int))
+    # cv2.imshow('r',edge)
+    # cv2.waitKey(1000)
+    # cv2.imshow('a',smoothed_deconvolved_img)
+    # cv2.waitKey(1000)
 
-    return deconvolved_img, len(sliced_color_imgs)
+
+    for depth, compensate_img in test_compensate_img_list:
+        compensate_img = np.clip(compensate_img, 0, np.max(compensate_img))
+        compensate_img = compensate_img/orig_sum * np.sum(color_img)
+        compensate_img = np.clip(compensate_img, 0, 255)
+        cv2.imwrite("Dataset/image_slice_"+str(depth)+".png",(compensate_img).astype(int))
+
+    # check
+    return blurred_deconvolved_img, len(sliced_color_imgs)
+    # return deconvolved_img, len(sliced_color_imgs)
 
 if __name__ == "__main__":
     color_image = cv2.imread('imageset/roadimage.png')
@@ -208,41 +239,45 @@ if __name__ == "__main__":
     point_y = np.clip(point_y, 0, H-1)
     point_x = np.clip(point_x, 0, W-1)
 
-    reconstructed_image_full = full_wiener_deconvolution(color_image, depth_image, depth_image[point_y][point_x]/1000.0)
-    cv2.imwrite("Dataset/wiener_img.png", (reconstructed_image_full*255).astype(int))
+    # test
+    test_num_of_slice = 8
+    reconstructed_image_reduced, actual_num_of_slice = reduced_wiener_deconvolution(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, test_num_of_slice)
+    cv2.imwrite("Dataset/test_reconstructed_image_"+str(actual_num_of_slice)+".png",(reconstructed_image_reduced * 255).astype(int))
+    # reconstructed_image_full = full_wiener_deconvolution(color_image, depth_image, depth_image[point_y][point_x]/1000.0)
+    # cv2.imwrite("Dataset/wiener_img.png", (reconstructed_image_full*255).astype(int))
 
-    f = open("Dataset/simulation_result.txt","w")
+    # f = open("Dataset/simulation_result.txt","w")
 
-    for num_of_slice in list_of_slice_numbers:
-        mean_time = 0.0
-        actual_num_of_slice = 0
-        reconstructed_image_reduced = np.zeros_like(color_image)
+    # for num_of_slice in list_of_slice_numbers:
+    #     mean_time = 0.0
+    #     actual_num_of_slice = 0
+    #     reconstructed_image_reduced = np.zeros_like(color_image)
         
-        for i in range(10): # repeat same work for 10 times and calculate mean time
-            time_0 = time.time()
-            reconstructed_image_reduced, actual_num_of_slice = reduced_wiener_deconvolution(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, num_of_slice)
-            time_1 = time.time()
+    #     for i in range(10): # repeat same work for 10 times and calculate mean time
+    #         time_0 = time.time()
+    #         reconstructed_image_reduced, actual_num_of_slice = reduced_wiener_deconvolution(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, num_of_slice)
+    #         time_1 = time.time()
 
-            mean_time += time_1 - time_0
+    #         mean_time += time_1 - time_0
         
-        mean_time /= 10
+    #     mean_time /= 10
 
-        print("actual_num_of_slice :", actual_num_of_slice)
-        print("mean computation time : ", mean_time)
-        PSNR = metrics.peak_signal_noise_ratio(reconstructed_image_full, reconstructed_image_reduced)
-        SSIM = metrics.structural_similarity(reconstructed_image_full, reconstructed_image_reduced, multichannel=True)
-        print("PSNR : ", PSNR)
-        print("SSIM : ", SSIM)
+    #     print("actual_num_of_slice :", actual_num_of_slice)
+    #     print("mean computation time : ", mean_time)
+    #     PSNR = metrics.peak_signal_noise_ratio(reconstructed_image_full, reconstructed_image_reduced)
+    #     SSIM = metrics.structural_similarity(reconstructed_image_full, reconstructed_image_reduced, multichannel=True)
+    #     print("PSNR : ", PSNR)
+    #     print("SSIM : ", SSIM)
 
-        writeline = str(actual_num_of_slice) + " " + str(mean_time) + " " + str(PSNR) + " " + str(SSIM) + "\n"
-        f.write(writeline)
+    #     writeline = str(actual_num_of_slice) + " " + str(mean_time) + " " + str(PSNR) + " " + str(SSIM) + "\n"
+    #     f.write(writeline)
         
-        reconstructed_image_reduced = cv2.circle(reconstructed_image_reduced, (point_x, point_y), 3, (0,255,0), -1)
-        cv2.namedWindow('reconstructed_image_reduced', cv2.WINDOW_AUTOSIZE)
-        cv2.imshow('reconstructed_image_reduced', reconstructed_image_reduced)
-        cv2.waitKey(1)
+    #     reconstructed_image_reduced = cv2.circle(reconstructed_image_reduced, (point_x, point_y), 3, (0,255,0), -1)
+    #     cv2.namedWindow('reconstructed_image_reduced', cv2.WINDOW_AUTOSIZE)
+    #     cv2.imshow('reconstructed_image_reduced', reconstructed_image_reduced)
+    #     cv2.waitKey(1)
 
-        cv2.imwrite("Dataset/reconstructed_image_"+str(actual_num_of_slice)+".png", (reconstructed_image_reduced * 255).astype(int))
+    #     cv2.imwrite("Dataset/reconstructed_image_"+str(actual_num_of_slice)+".png", (reconstructed_image_reduced * 255).astype(int))
         
 
-    f.close()
+    # f.close()
