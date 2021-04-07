@@ -162,6 +162,92 @@ def get_compensate(image, kernel) :
     
     return compensate    
 
+def reduced_wiener_deconvolution(color_img, depth_img, gaze_depth, number_of_slices):
+    """
+    slice color image by 'number_of_slices' in depth image. Create corresponding PSF on each slice. Apply wiener deconvolution on every slice and add up every slice. return normalized reconstructed image.
+    """
+    eye_focal_length = 1/ (1/gaze_depth + 1/eye_length)
+    c=1e+4 #coefficient for gaussian psf
+    color_img_list=[]
+    color_img=color_img.astype(float)
+    depth_img=depth_img.astype(float)
+    deconvolved_img=np.zeros_like(color_img)
+    mask=np.zeros_like(color_img)
+    edge = np.zeros_like(depth_img)
+    x,y=np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2-1,RES[0]), np.linspace(-RES[1]//2,RES[1]//2-1,RES[1]))
+    radius=np.sqrt(x*x+y*y)
+
+    depths = depth_img[depth_img>0]
+    percentiles = np.linspace(0,100,number_of_slices+1) # total 
+    bounds_of_depth = np.percentile(depths, percentiles, interpolation='nearest')
+
+    depths = np.unique(depths)
+
+    sliced_color_imgs=[]
+
+    for idx in range(number_of_slices): # idx th slice
+        pixel_select=np.zeros_like(depth_img)
+        for depth in depths: # create boolean mask
+            if bounds_of_depth[idx] <= depth and depth< bounds_of_depth[idx+1]:
+                pixel_select[depth_img==depth]=1 
+        
+        if idx == number_of_slices-1: # add last depth on last slice
+            pixel_select[depth_img == bounds_of_depth[number_of_slices]] = 1
+
+        masked_depth_img = depth_img[pixel_select == 1]
+
+        if len(masked_depth_img)==0: # if masked_depth_img is blank
+            continue
+        
+        mean_of_depth = np.mean(masked_depth_img)
+        edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
+        pixel_select=np.stack((pixel_select,pixel_select,pixel_select), axis=2)
+        color_img_slice = color_img * pixel_select
+        sliced_color_imgs.append((color_img_slice, mean_of_depth/1000.0))
+
+
+    test_compensate_img_list = []
+    for color_img_slice, depth in sliced_color_imgs:
+        b = (eye_focal_length/(gaze_depth-eye_focal_length))* pupil_diameter * abs(depth - gaze_depth) / depth # blur diameter
+        kernel = np.zeros_like(color_img_slice[:,:,0]) # must be the same size with image for modifying if is_real in skimage.wiener is True
+        if b==0:
+            kernel[RES[1]//2, RES[0]//2] = 1 # delta function
+        else:
+            kernel=2/(pi*(c*b)**2)*np.exp(-2*radius**2/(c*b)**2)
+            kernel[radius>res_kernel]=0 # use 21*21 nonzero points near origin
+        
+        #normalization
+        if np.sum(kernel)==0: # when does this occurs?
+            kernel[res_window[1]//2, res_window[0]//2]=1
+        else:
+            kernel=kernel/np.sum(kernel)
+
+        R_img_slice, G_img_slice, B_img_slice = color_img_slice[:,:,0], color_img_slice[:,:,1], color_img_slice[:,:,2]
+        
+        compensate_R = restoration.wiener(R_img_slice, kernel, 1e+0, clip=False) # why is balance 1e+0? why is clip False?
+        compensate_G = restoration.wiener(G_img_slice, kernel, 1e+0, clip=False)
+        compensate_B = restoration.wiener(B_img_slice, kernel, 1e+0, clip=False)
+
+        compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis=2)
+        test_compensate_img_list.append((depth, compensate_img))
+
+        deconvolved_img += compensate_img
+
+    # clip negative values
+    deconvolved_img = np.clip(deconvolved_img, 0, np.max(deconvolved_img))
+    orig_sum = np.sum(deconvolved_img)
+    deconvolved_img = deconvolved_img/np.sum(deconvolved_img) * np.sum(color_img) /255.0 # make total brightness similar with original image
+    deconvolved_img = np.clip(deconvolved_img,0,1)
+
+    edge = np.clip(edge, 0, 255).astype('uint8')
+    dilated = cv2.dilate(edge, np.ones((3, 3)))
+    dilated = np.stack((dilated, dilated, dilated), axis=2)
+
+    blurred_deconvolved_img = cv2.GaussianBlur(deconvolved_img, (11, 11), 0)
+    smoothed_deconvolved_img = np.where(dilated==np.array([255,255,255]), blurred_deconvolved_img, deconvolved_img)
+
+    # check
+    return smoothed_deconvolved_img, len(sliced_color_imgs)
 
 def blurring_image(color_img, depth_img, gaze_depth) :
     focal_length = 1 / (1/(gaze_depth) + 1/eye_length)
@@ -340,8 +426,8 @@ if __name__ == "__main__":
             depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
             color_image = cv2.circle(color_image, (point_x, point_y), 3, (0,255,0), -1)
-            blurred_image = blurring_image(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
-            blurred_image = cv2.circle(blurred_image, (point_x, point_y), 3, (0,255,0), -1)
+            deconv_image = reduced_wiener_deconvolution(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, 8)
+            deconv_image = cv2.circle(deconv_image, (point_x, point_y), 3, (0,255,0), -1)
 
             # print("time : ", round(current_time - time_0, 4))
             # print("theta, phi : ", theta, phi)
@@ -350,14 +436,14 @@ if __name__ == "__main__":
 
             # Show images
             #cv2.namedWindow('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN)
-            cv2.namedWindow('Convert_blurred_image', cv2.WINDOW_AUTOSIZE)
-            cv2.resizeWindow("Convert_blurred_image", resolution[0], resolution[1])
-            cv2.moveWindow('Convert_blurred_image', screen.x - 1, screen.y - 1)
+            cv2.namedWindow('deconv_image', cv2.WINDOW_AUTOSIZE)
+            cv2.resizeWindow("deconv_image", resolution[0], resolution[1])
+            cv2.moveWindow('deconv_image', screen.x - 1, screen.y - 1)
             #cv2.setWindowProperty('Convert_blurred_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-            display_blurred_image = cv2.copyMakeBorder( blurred_image, int((resolution[1]-blurred_image.shape[0])/2), int((resolution[1]-blurred_image.shape[0])/2), int((resolution[0]-blurred_image.shape[1])/2), int((resolution[0]-blurred_image.shape[1])/2), 0)
+            display_deconvoluted_image = cv2.copyMakeBorder( blurred_image, int((resolution[1]-blurred_image.shape[0])/2), int((resolution[1]-blurred_image.shape[0])/2), int((resolution[0]-blurred_image.shape[1])/2), int((resolution[0]-blurred_image.shape[1])/2), 0)
 
-            cv2.imshow('Convert_blurred_image', display_blurred_image)
+            cv2.imshow('deconv_image', display_deconvoluted_image)
 
             # Stack both images horizontally
             images = np.hstack((color_image, depth_colormap))
