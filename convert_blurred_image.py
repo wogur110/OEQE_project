@@ -243,6 +243,15 @@ if __name__ == "__main__":
     config.enable_stream(rs.stream.depth, DEPTH_CAMERA_RES[0], DEPTH_CAMERA_RES[1], rs.format.z16, 30)
     config.enable_stream(rs.stream.color, COLOR_CAMERA_RES[0], COLOR_CAMERA_RES[1], rs.format.bgr8, 30)
 
+    # zero hole filling filter
+    spatial = rs.spatial_filter()
+    spatial.set_option(rs.option.filter_magnitude, 5)
+    spatial.set_option(rs.option.filter_smooth_alpha, 1)
+    spatial.set_option(rs.option.filter_smooth_delta, 50)
+    spatial.set_option(rs.option.holes_fill, 3)
+    depth_to_disparity = rs.disparity_transform(True)
+    disparity_to_depth = rs.disparity_transform(False)
+
     # Align process for realsense frames
     align_to = rs.stream.color
     align = rs.align(align_to)
@@ -295,6 +304,9 @@ if __name__ == "__main__":
             theta = message_1[b'theta']
             phi = message_1[b'phi']
 
+            # Filter the depth frame
+            depth_frame = spatial.process(depth_frame)
+
             # Convert images to numpy arrays
             depth_image = np.asanyarray(depth_frame.get_data())
             color_image = np.asanyarray(color_frame.get_data())
@@ -316,13 +328,12 @@ if __name__ == "__main__":
             depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
             color_image = cv2.circle(color_image, (point_x, point_y), 3, (0,255,0), -1)
-
             filtered_image = inverse_filtering(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
             filtered_image = cv2.circle(filtered_image, (point_x, point_y), 3, (0,255,0), -1)
 
-            print("time : ", round(current_time - time_0, 4))
-            print("theta, phi : ", theta, phi)
-            print("position(x,y), depth : ", point_x, point_y, depth_image[point_y][point_x], "\n")
+            # print("time : ", round(current_time - time_0, 4))
+            # print("theta, phi : ", theta, phi)
+            # print("position(x,y), depth : ", point_x, point_y, depth_image[point_y][point_x], "\n")
 
 
             # Show images
@@ -331,7 +342,7 @@ if __name__ == "__main__":
             cv2.moveWindow('Convert_filtered_image', screen.x - 1, screen.y - 1)
             cv2.setWindowProperty('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-            display_filtered_image = cv2.copyMakeBorder( filtered_image, int((resolution[1]-filtered_image.shape[0])/2), int((resolution[1]-filtered_image.shape[0])/2), int((resolution[0]-filtered_image.shape[1])/2), int((resolution[0]-filtered_image.shape[1])/2), 0)
+            display_filtered_image = cv2.copyMakeBorder(filtered_image, int((resolution[1]-filtered_image.shape[0])/2), int((resolution[1]-filtered_image.shape[0])/2), int((resolution[0]-filtered_image.shape[1])/2), int((resolution[0]-filtered_image.shape[1])/2), 0)
 
             cv2.imshow('Convert_filtered_image', display_filtered_image)
 
