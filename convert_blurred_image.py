@@ -27,7 +27,7 @@ from skimage import color, data, restoration, metrics
 import screeninfo
 
 #Get ScreenInfo
-screen_id = 1
+screen_id = 0
 screen = screeninfo.get_monitors()[screen_id]
 resolution = [screen.width, screen.height]
 
@@ -148,7 +148,7 @@ def inverse_filtering(color_img, depth_img, gaze_depth) :
     """
 
     eye_focal_length = 1 / (1 / gaze_depth + 1 / eye_length)
-    c = 1e+4   #coefficient for gaussian psf
+    c = 4e+4   #coefficient for gaussian psf
     color_img = color_img.astype(float)
     depth_img = depth_img.astype(float)
     filtered_img = np.zeros_like(color_img)
@@ -227,6 +227,7 @@ def inverse_filtering(color_img, depth_img, gaze_depth) :
     blurred_filtered_img = cv2.GaussianBlur(filtered_img, (11, 11), 0)
     smoothed_filtered_img = np.where(dilated_edge==np.array([255,255,255]), blurred_filtered_img, filtered_img)
 
+    #smoothed_filtered_img = filtered_img
     smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, np.max(smoothed_filtered_img))
     smoothed_filtered_img = smoothed_filtered_img / np.sum(smoothed_filtered_img) * target_intensity_sum / 255.0
     smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, 1)
@@ -249,8 +250,7 @@ if __name__ == "__main__":
     spatial.set_option(rs.option.filter_smooth_alpha, 1)
     spatial.set_option(rs.option.filter_smooth_delta, 50)
     spatial.set_option(rs.option.holes_fill, 3)
-    depth_to_disparity = rs.disparity_transform(True)
-    disparity_to_depth = rs.disparity_transform(False)
+    hole_filling = rs.hole_filling_filter()
 
     # Align process for realsense frames
     align_to = rs.stream.color
@@ -305,7 +305,8 @@ if __name__ == "__main__":
             phi = message_1[b'phi']
 
             # Filter the depth frame
-            depth_frame = spatial.process(depth_frame)
+            #depth_frame = spatial.process(depth_frame)
+            depth_frame = hole_filling.process(depth_frame)
 
             # Convert images to numpy arrays
             depth_image = np.asanyarray(depth_frame.get_data())
@@ -337,17 +338,19 @@ if __name__ == "__main__":
 
 
             # Show images
-            cv2.namedWindow('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN)
-            cv2.resizeWindow("Convert_filtered_image", resolution[0], resolution[1])
-            cv2.moveWindow('Convert_filtered_image', screen.x - 1, screen.y - 1)
-            cv2.setWindowProperty('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.namedWindow('Convert_filtered_image', cv2.WINDOW_AUTOSIZE)
+            #cv2.resizeWindow("Convert_filtered_image", resolution[0], resolution[1])
+            #cv2.moveWindow('Convert_filtered_image', screen.x - 1, screen.y - 1)
+            #cv2.setWindowProperty('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
             display_filtered_image = cv2.copyMakeBorder(filtered_image, int((resolution[1]-filtered_image.shape[0])/2), int((resolution[1]-filtered_image.shape[0])/2), int((resolution[0]-filtered_image.shape[1])/2), int((resolution[0]-filtered_image.shape[1])/2), 0)
 
             cv2.imshow('Convert_filtered_image', display_filtered_image)
 
+            images = np.hstack((color_image, depth_colormap))
+
             cv2.namedWindow('original_image', cv2.WINDOW_AUTOSIZE)
-            cv2.imshow('original_image', color_image)
+            cv2.imshow('original_image', images)
             cv2.waitKey(1)
 
             sub_1_3d.disconnect(b"tcp://%s:%s" %(addr.encode('utf-8'),sub_port))
