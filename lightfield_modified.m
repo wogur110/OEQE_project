@@ -5,7 +5,9 @@ eye_length = 20*mm;
 FOVx = 30*pi/180;
 FOVy = 30*pi/180;
 light_field_origin_plane_distance = 1;
-
+source = './imageset';
+result = './result';
+depth = [0.2, 0.3, 1.0, 2.0, 5.0];
 %%
 res_world = [200 200];
 wdx = 2*light_field_origin_plane_distance*tan(FOVx/2)/res_world(2);
@@ -27,7 +29,6 @@ rx = -res_retina(2)/2*rdx+rdx/2 : rdx : res_retina(2)/2*rdx - rdx/2;
 ry = -res_retina(1)/2*rdy+rdy/2 : rdy : res_retina(1)/2*rdy - rdy/2;
 
 %% get world images
-source = 'C:\Users/tae/Google Drive/2021/gradProject/LF/color_castle';
 first = 1;
 last = 49;
 images = zeros(last, res_world(1), res_world(2), 3);
@@ -37,7 +38,6 @@ for imgid = first : last
      img = imread(fileLocator, 'PNG');
      img = imresize(img, res_world);
      images(imgid,:,:,:) = img;
-%      images(1+mod(imgid-1,res_view(2)) + res_view(2)*(res_view(1)-1-fix((imgid-1)/res_view(2))),:,:,:) = img;
 end
 
 %% Ray initialization
@@ -66,23 +66,8 @@ for vy_idx = 1:res_view(1)
         end
     end
 end
-% for vy_idx = 1:res_view(1)
-%     for vx_idx = 1:res_view(2)
-%         view_idx = (vy_idx-1)*res_view(2)+vx_idx;
-%         idx = (view_idx-1)*prod(res_retina)+1:view_idx*prod(res_retina);
-%         rays(idx,1)=reshape(RX,[],1);
-%         rays(idx,2)=atan((vx(vx_idx)-rays(idx,1))/eye_length);
-%         rays(idx,3)=reshape(RY,[],1);
-%         rays(idx,4)=atan((vy(vy_idx)-rays(idx,3))/eye_length);
-%         rays(idx,5)=reshape(ARGRX,[],1);
-%         rays(idx,6)=reshape(ARGRY,[],1);
-%         rays(idx,7)=Pupil(vy_idx,vx_idx);
-%     end
-% end
 
-source2 = 'C:\Users/tae/Google Drive/2021/gradProject/LF/result2';
-depth = [0.2, 0.3, 1.0, 2.0, 5.0];
-for i = 1:4
+for i = 1:length(depth)
     focal_length = 1/(1/eye_length + 1/depth(i));
     %% Ray transfer matrix
     transfer_x = [1 light_field_origin_plane_distance; 0 1] * [1 0; -1/focal_length 1] * [1 eye_length; 0 1];
@@ -113,8 +98,8 @@ for i = 1:4
     retina_image = rot90(retina_image,2);
     figure(i);
     imshow(retina_image);
-    title(sprintf('retina%.1f',depth(i)));
-    imwrite(retina_image, fullfile(source2, sprintf('r2d_%2d.png',depth(i)*10)));
+    title(sprintf('retina%.2f',depth(i)));
+    imwrite(retina_image, fullfile(result, sprintf('result%.2f.png',depth(i))));
 end
 
 
