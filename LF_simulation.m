@@ -9,7 +9,7 @@ source = './imageset/Room/Lightfield';
 result = './result/LF_result/Room';
 depth = [0.2, 0.25, 0.3, 0.375, 0.5, 0.6, 0.75, 1.0, 1.5, 3.0];
 %%
-res_world = [200 200];
+res_world = [500 500];
 wdx = 2*light_field_origin_plane_distance*tan(FOVx/2)/res_world(2);
 wdy = 2*light_field_origin_plane_distance*tan(FOVy/2)/res_world(1);
 wx = -res_world(2)/2*wdx + wdx/2 : wdx : res_world(2)/2*wdx - wdx/2;
@@ -23,8 +23,8 @@ vy = -res_view(1)/2*vdy + vdy/2 : vdy : res_view(1)/2*vdy - vdy/2;
 [VY, VX] = meshgrid(vy,vx);
 Pupil = VX.^2+VY.^2<=view_radius^2;
 
-res_retina = [200 200];
-rdx = 0.05*mm; rdy = rdx;
+res_retina = [500 500];
+rdx = 0.02*mm; rdy = rdx;
 rx = -res_retina(2)/2*rdx+rdx/2 : rdx : res_retina(2)/2*rdx - rdx/2;
 ry = -res_retina(1)/2*rdy+rdy/2 : rdy : res_retina(1)/2*rdy - rdy/2;
 
