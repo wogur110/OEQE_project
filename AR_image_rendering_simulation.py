@@ -45,6 +45,7 @@ converted_theta, converted_phi = 0, 0
 
 #simulation configure
 RES = 500,500
+acc_depth = 3.0 #accommodation depth : 3000mm
 
 def inverse_filtering(color_img, depth_img, gaze_depth, num_slicing_imgs):
     """
@@ -139,9 +140,9 @@ def inverse_filtering(color_img, depth_img, gaze_depth, num_slicing_imgs):
 
 def display2retina(smoothed_filtered_img, acc_depth) :
     # Retina
-    rdx = 0.02e-3
+    rdx = 0.02e-3 # distance of adjacent retina coordinates
 
-    r = (rdx * RES[0] / 2.0 / eye_length) / np.tan(COLOR_CAMERA_MAX_PHI) # display to retina crop ratio
+    r = (rdx * RES[0] / 2.0 / eye_length) / np.tan(COLOR_CAMERA_MAX_PHI) # crop ratio from display img to retina img 
     retina_img = smoothed_filtered_img[int(RES[1] * (1-r) / 2): int(RES[1] * (1+r) / 2) , int(RES[0] * (1-r) / 2) : int(RES[0] * (1+r) / 2)]
     retina_img = cv2.resize(retina_img, dsize = RES)
 
@@ -224,28 +225,28 @@ if __name__ == "__main__":
     color_image = cv2.imread('imageset/Castle/Lightfield/0025.png')
     depth_image = cv2.imread('imageset/Castle/Depthmap/depthmap.png')    
     depth_image = cv2.cvtColor(depth_image, cv2.COLOR_BGR2GRAY)
-    LF_rendered_image = cv2.imread('result/LF_result/Castle/depth3000.png') #rendered which accomodation depth is 300mm
-    LF_rendered_image = cv2.resize(LF_rendered_image, dsize = RES, interpolation = cv2.INTER_AREA)
+    LF_rendered_image = cv2.imread('result/LF_result/Castle/depth%d.png' %(int(acc_depth *1000))) #rendered which accomodation depth is 3000mm
 
-    color_image = cv2.resize(color_image, dsize = RES, interpolation = cv2.INTER_AREA) # resampling using pixel area relation
+    LF_rendered_image = cv2.resize(LF_rendered_image, dsize = RES, interpolation = cv2.INTER_AREA) # resampling using pixel area relation
+    color_image = cv2.resize(color_image, dsize = RES, interpolation = cv2.INTER_AREA) 
     depth_image = cv2.resize(depth_image, dsize = RES, interpolation = cv2.INTER_AREA)
 
     depth_image = (255 - depth_image) * 3.0 / 255.0 * 1000.0 #depth : 0m(255) ~ 3m(0) linearly distributed
 
     # apply colormap on depth image (image must be converted to 8-bit per pixel first)
     depth_colormap=cv2.applyColorMap(cv2.convertScaleAbs(depth_image,alpha=0.03), cv2.COLORMAP_JET)
-
-    #find tracking point where depth is 1000mm
+    
     # H, W = color_image.shape[0], color_image.shape[1]
     # point_y = int(H/2 * (1 + np.tan(converted_theta) / np.tan(COLOR_CAMERA_MAX_THETA)))
     # point_x = int(W/2 * (1 + np.tan(converted_phi) / np.tan(COLOR_CAMERA_MAX_PHI)))
     # point_y = np.clip(point_y, 0, H-1)
     # point_x = np.clip(point_x, 0, W-1)
 
-    point_y = np.where(depth_image == 3000.0)[0][0]
-    point_x = np.where(depth_image == 3000.0)[1][0]
+    #find tracking point where depth is 3000mm
+    point_y = np.where(depth_image == acc_depth * 1000)[0][0]
+    point_x = np.where(depth_image == acc_depth * 1000)[1][0]
 
-    f = open("result/AR_image_rendering/simulation_result.txt","w")
+    f = open("result/AR_image_rendering/simulation_result.txt","w") # write simulation result
 
     for num_slicing_imgs in num_slicing_imgs_list:
         mean_time = 0.0
@@ -260,7 +261,7 @@ if __name__ == "__main__":
         
         mean_time /= 5
 
-        rendered_retina_img = display2retina(smoothed_filtered_img, acc_depth = 1.0)
+        rendered_retina_img = display2retina(smoothed_filtered_img, acc_depth)
 
         print("actual_num_slicing_imgs :", actual_num_slicing_imgs)
         print("mean computation time : ", mean_time)
