@@ -35,6 +35,7 @@ kernel_radius_pixel = 21
 
 #setting for reduced wiener deconvolution
 num_slicing_imgs_list=[1,2,4,8,16,32,64,128,256,512,1024,2048]
+c_range = (1e+3, 1e+5)
 
 # setting for realsense2 camera
 COLOR_CAMERA_MAX_THETA = 30 / 2.0 * (pi / 180)
@@ -45,14 +46,16 @@ converted_theta, converted_phi = 0, 0
 
 #simulation configure
 RES = 500,500
-acc_depth = 3.0 #accommodation depth : 3000mm
+acc_depth = 1.0 #accommodation depth : 3000mm (one of 3000mm, 1000mm, 600mm)
 
-def inverse_filtering(color_img, depth_img, gaze_depth, num_slicing_imgs):
+
+def rendering_display(color_img, depth_img, gaze_depth, c = 2e+4, num_slicing_imgs = 4):
     """
-    slice color image by 'num_slicing_imgs' in depth image. Create corresponding PSF on each slice. Apply wiener deconvolution on every slice and add up every slice. return normalized reconstructed image.
+    slice color image by 'num_slicing_imgs' in depth image. Create corresponding PSF on each slice. 
+    Apply convolution on every slice and add up every slice. return normalized reconstructed image.
+    c : coefficient for gaussian psf
     """
     eye_focal_length = 1 / (1 / gaze_depth + 1 / eye_length)
-    c = 1e+4 # coefficient for gaussian psf
     color_img=color_img.astype(float)
     depth_img=depth_img.astype(float)
     filtered_img=np.zeros_like(color_img)
@@ -93,7 +96,7 @@ def inverse_filtering(color_img, depth_img, gaze_depth, num_slicing_imgs):
 
     for sliced_color_img, mean_depth in sliced_color_imgs:
         b = (eye_focal_length / (gaze_depth - eye_focal_length))* pupil_diameter * abs(mean_depth - gaze_depth) / mean_depth # blur diameter
-        kernel = np.zeros_like(sliced_color_img[:,:,0]) # must be the same size with image for modifying if is_real in skimage.wiener is True
+        kernel = np.zeros_like(sliced_color_img[:,:,0]) # same size with single channel of image (2D)
         
         if b == 0 :
             kernel[RES[1]//2, RES[0]//2] = 1 # delta function
@@ -102,18 +105,12 @@ def inverse_filtering(color_img, depth_img, gaze_depth, num_slicing_imgs):
             kernel[radius > kernel_radius_pixel] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
         
         #normalization
-        if np.sum(kernel) == 0: # when does this occurs?
+        if np.sum(kernel) == 0: # when does this occurs? if psf is too small in every pixel
             kernel[res_window[1]//2, res_window[0]//2]=1
         else:
             kernel = kernel / np.sum(kernel)
 
-        R_img_slice, G_img_slice, B_img_slice = sliced_color_img[:,:,0], sliced_color_img[:,:,1], sliced_color_img[:,:,2]
-        
-        compensate_R = restoration.wiener(R_img_slice, kernel, 0.1e+0, clip=False) # why is balance 1e+0? why is clip False?
-        compensate_G = restoration.wiener(G_img_slice, kernel, 0.1e+0, clip=False)
-        compensate_B = restoration.wiener(B_img_slice, kernel, 0.1e+0, clip=False)
-
-        compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis=2)
+        compensate_img = cv2.filter2D(sliced_color_img, -1, kernel)
         filtered_img += compensate_img
 
     #just add zero depth pixel to filtered image
@@ -137,6 +134,185 @@ def inverse_filtering(color_img, depth_img, gaze_depth, num_slicing_imgs):
     smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, 1)
 
     return smoothed_filtered_img, len(sliced_color_imgs)
+
+def full_rendering_display(color_img, depth_img, gaze_depth, c = 2e+4):
+    """
+    slice color image by 'each depth' in depth image. Create corresponding PSF on each slice. 
+    Apply convolution on every slice and add up every slice. return normalized reconstructed image.
+    c : coefficient for gaussian psf
+    """
+    eye_focal_length = 1 / (1 / gaze_depth + 1 / eye_length)
+    color_img=color_img.astype(float)
+    depth_img=depth_img.astype(float)
+    filtered_img=np.zeros_like(color_img)
+    edge = np.zeros_like(depth_img)
+
+    # Calculate target intensity sum
+    target_intensity_sum = np.sum(color_img)
+
+    x,y = np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2-1,RES[0]), np.linspace(-RES[1]//2,RES[1]//2-1,RES[1]))
+    radius = np.sqrt(x*x+y*y)
+
+    depths = np.unique(depth_img[depth_img>0])
+
+    sliced_color_imgs = []
+
+    for depth in depths : 
+        pixel_select=np.zeros_like(depth_img)
+        pixel_select[depth_img == depth] = 1 
+
+        edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
+        pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
+        sliced_color_img = color_img * pixel_select
+        sliced_color_imgs.append((sliced_color_img, depth / 1000.0))
+
+    for sliced_color_img, mean_depth in sliced_color_imgs:
+        b = (eye_focal_length / (gaze_depth - eye_focal_length))* pupil_diameter * abs(mean_depth - gaze_depth) / mean_depth # blur diameter
+        kernel = np.zeros_like(sliced_color_img[:,:,0]) # same size with single channel of image (2D)
+        
+        if b == 0 :
+            kernel[RES[1]//2, RES[0]//2] = 1 # delta function
+        else :
+            kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
+            kernel[radius > kernel_radius_pixel] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
+        
+        #normalization
+        if np.sum(kernel) == 0: # when does this occurs? if psf is too small in every pixel
+            kernel[res_window[1]//2, res_window[0]//2]=1
+        else:
+            kernel = kernel / np.sum(kernel)
+
+        compensate_img = cv2.filter2D(sliced_color_img, -1, kernel)
+        filtered_img += compensate_img
+
+    #just add zero depth pixel to filtered image
+    pixel_select = np.zeros_like(depth_img)
+    pixel_select[depth_img==0] = 1
+    pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
+    color_img_zero_depth = color_img * pixel_select
+    filtered_img += color_img_zero_depth
+
+    edge = np.clip(edge, 0, 255).astype('uint8')
+    dilated_edge = cv2.dilate(edge, np.ones((3, 3)))
+    dilated_edge = np.stack((dilated_edge, dilated_edge, dilated_edge), axis=2)
+
+    #blurred_filtered_img = cv2.GaussianBlur(filtered_img, (5, 5), 0) # Smoothing boundary
+    blurred_filtered_img = filtered_img # No smoothing boundary
+    smoothed_filtered_img = np.where(dilated_edge==np.array([255,255,255]), blurred_filtered_img, filtered_img)
+
+    #smoothed_filtered_img = filtered_img
+    smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, np.max(smoothed_filtered_img))
+    smoothed_filtered_img = smoothed_filtered_img / np.sum(smoothed_filtered_img) * target_intensity_sum / 255.0
+    smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, 1)
+
+    return smoothed_filtered_img, len(sliced_color_imgs)
+
+def adaptive_rendering_display(color_img, depth_img, gaze_depth, c = 2e+4, diopter_range = 0.6):
+    """
+    slice color image by 'each depth' in depth image. Create corresponding PSF on each slice. 
+    Apply convolution on every slice and add up every slice. return normalized reconstructed image.
+    c : coefficient for gaussian psf
+    """
+    eye_focal_length = 1 / (1 / gaze_depth + 1 / eye_length)
+    color_img=color_img.astype(float)
+    depth_img=depth_img.astype(float)
+    filtered_img=np.zeros_like(color_img)
+    edge = np.zeros_like(depth_img)
+
+    # Calculate target intensity sum
+    target_intensity_sum = np.sum(color_img)
+
+    x,y = np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2-1,RES[0]), np.linspace(-RES[1]//2,RES[1]//2-1,RES[1]))
+    radius = np.sqrt(x*x+y*y)
+
+    gaze_diopter = 1 / gaze_depth
+    diopter_img = 1 / (depth_img / 1000.0 + 1e-10)
+
+    sliced_color_imgs = []
+
+    diopter_range_bounds = [0, diopter_range, 1e+10]
+    diopters = np.unique(diopter_img)
+    num_slicing_imgs = 2
+
+    for idx in range(num_slicing_imgs): # idx th slice
+        pixel_select=np.zeros_like(depth_img)
+        for diopter in diopters: # create boolean mask
+            if diopter_range_bounds[idx] <= abs(diopter - gaze_diopter) and abs(diopter - gaze_diopter) < diopter_range_bounds[idx+1]:
+                pixel_select[depth_img==diopter] = 1 
+        
+        if idx == num_slicing_imgs - 1 : # add last depth on last slice
+            pixel_select[depth_img == diopter_range_bounds[num_slicing_imgs]] = 1
+
+        masked_depth_img = depth_img[pixel_select == 1]
+
+        if len(masked_depth_img) == 0: # if masked_depth_img is blank
+            continue
+        
+        mean_depth = np.mean(masked_depth_img)
+        edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
+        pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
+        sliced_color_img = color_img * pixel_select
+        sliced_color_imgs.append((sliced_color_img, mean_depth / 1000.0))
+
+    pixel_select=np.zeros_like(depth_img)
+    pixel_select[abs(diopter_img - gaze_diopter) <= diopter_range] = 1 
+    edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
+    pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
+    sliced_color_img = color_img * pixel_select
+    sliced_color_imgs.append((sliced_color_img, gaze_depth))
+
+    pixel_select=np.zeros_like(depth_img)
+    pixel_select[abs(diopter_img - gaze_diopter) > diopter_range] = 1 
+    edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
+    masked_diopter_img = diopter_img[pixel_select == 1]
+    masked_diopter_img[masked_diopter_img < gaze_diopter] = 2 * gaze_diopter - masked_diopter_img[masked_diopter_img < gaze_diopter]
+    mean_diopter = np.mean(masked_diopter_img)    
+    pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
+    sliced_color_img = color_img * pixel_select    
+
+    sliced_color_imgs.append((sliced_color_img, 1 / mean_diopter))
+
+    for sliced_color_img, mean_depth in sliced_color_imgs:
+        b = (eye_focal_length / (gaze_depth - eye_focal_length))* pupil_diameter * abs(mean_depth - gaze_depth) / mean_depth # blur diameter
+        kernel = np.zeros_like(sliced_color_img[:,:,0]) # same size with single channel of image (2D)
+        
+        if b == 0 :
+            kernel[RES[1]//2, RES[0]//2] = 1 # delta function
+        else :
+            kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
+            kernel[radius > kernel_radius_pixel] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
+        
+        #normalization
+        if np.sum(kernel) == 0: # when does this occurs? if psf is too small in every pixel
+            kernel[res_window[1]//2, res_window[0]//2]=1
+        else:
+            kernel = kernel / np.sum(kernel)
+
+        compensate_img = cv2.filter2D(sliced_color_img, -1, kernel)
+        filtered_img += compensate_img
+
+    #just add zero depth pixel to filtered image
+    pixel_select = np.zeros_like(depth_img)
+    pixel_select[depth_img==0] = 1
+    pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
+    color_img_zero_depth = color_img * pixel_select
+    filtered_img += color_img_zero_depth
+
+    edge = np.clip(edge, 0, 255).astype('uint8')
+    dilated_edge = cv2.dilate(edge, np.ones((3, 3)))
+    dilated_edge = np.stack((dilated_edge, dilated_edge, dilated_edge), axis=2)
+
+    #blurred_filtered_img = cv2.GaussianBlur(filtered_img, (5, 5), 0) # Smoothing boundary
+    blurred_filtered_img = filtered_img # No smoothing boundary
+    smoothed_filtered_img = np.where(dilated_edge==np.array([255,255,255]), blurred_filtered_img, filtered_img)
+
+    #smoothed_filtered_img = filtered_img
+    smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, np.max(smoothed_filtered_img))
+    smoothed_filtered_img = smoothed_filtered_img / np.sum(smoothed_filtered_img) * target_intensity_sum / 255.0
+    smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, 1)
+
+    return smoothed_filtered_img, len(sliced_color_imgs)
+
 
 def display2retina(smoothed_filtered_img, acc_depth) :
     # Retina
@@ -219,47 +395,86 @@ def display2retina_LF(smoothed_filtered_img, acc_depth) :
 
     return retina_img
 
+
+def simulation_c(color_image, depth_image, LF_rendered_image, pos) :
+    point_x, point_y = pos
+    f = open("result/AR_image_rendering/sim_c/sim_c.txt","w") # write simulation result
+
+    c_l, c_r = c_range
+    smoothed_filtered_img_l, _ = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, c = c_l)
+    rendered_retina_img_l = display2retina(smoothed_filtered_img_l, acc_depth)
+    PSNR_l = metrics.peak_signal_noise_ratio(LF_rendered_image, rendered_retina_img_l)
+    smoothed_filtered_img_r, _ = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, c = c_r)
+    rendered_retina_img_r = display2retina(smoothed_filtered_img_r, acc_depth)    
+    PSNR_r = metrics.peak_signal_noise_ratio(LF_rendered_image, rendered_retina_img_r)
+
+    iteration = 0
+    c_opt = 0.0
+
+    while (iteration < 15) :
+        c_m1 = (c_l * 2 + c_r) / 3.0
+        c_m2 = (c_l + c_r * 2) / 3.0
+        c_list = [c_l, c_m1, c_m2, c_r]
+
+        smoothed_filtered_img_m1, _ = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, c = c_m1)
+        rendered_retina_img_m1 = display2retina(smoothed_filtered_img_m1, acc_depth)
+        PSNR_m1 = metrics.peak_signal_noise_ratio(LF_rendered_image, rendered_retina_img_m1)
+        smoothed_filtered_img_m2, _ = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, c = c_m2)        
+        rendered_retina_img_m2 = display2retina(smoothed_filtered_img_m2, acc_depth)        
+        PSNR_m2 = metrics.peak_signal_noise_ratio(LF_rendered_image, rendered_retina_img_m2)
+
+        PSNR_list = np.array([PSNR_l, PSNR_m1, PSNR_m2, PSNR_r])
+        argmax = np.argmax(PSNR_list)
         
+        c_opt = c_list[argmax]
+        PSNR_max = PSNR_list[argmax]
 
-if __name__ == "__main__":
-    color_image = cv2.imread('imageset/Castle/Lightfield/0025.png')
-    depth_image = cv2.imread('imageset/Castle/Depthmap/depthmap.png')    
-    depth_image = cv2.cvtColor(depth_image, cv2.COLOR_BGR2GRAY)
-    LF_rendered_image = cv2.imread('result/LF_result/Castle/depth%d.png' %(int(acc_depth *1000))) #rendered which accomodation depth is 3000mm
+        if argmax == 0 :
+            c_r = c_m1
+            PSNR_r = PSNR_m1
+        elif argmax == 1 :
+            c_r = c_m2
+            PSNR_r = PSNR_m2
+        elif argmax == 2 :
+            c_l = c_m1
+            PSNR_l = PSNR_m1
+        elif argmax == 3 :
+            c_l = c_m2
+            PSNR_l = PSNR_m2
 
-    LF_rendered_image = cv2.resize(LF_rendered_image, dsize = RES, interpolation = cv2.INTER_AREA) # resampling using pixel area relation
-    color_image = cv2.resize(color_image, dsize = RES, interpolation = cv2.INTER_AREA) 
-    depth_image = cv2.resize(depth_image, dsize = RES, interpolation = cv2.INTER_AREA)
+        print("c_l = %.2f, c_r = %.2f"%(c_l, c_r))
+        print("c_opt = %.2f, PSNR_max = %.4f"%(c_opt, PSNR_max))
 
-    depth_image = (255 - depth_image) * 3.0 / 255.0 * 1000.0 #depth : 0m(255) ~ 3m(0) linearly distributed
+        iteration += 1
 
-    # apply colormap on depth image (image must be converted to 8-bit per pixel first)
-    depth_colormap=cv2.applyColorMap(cv2.convertScaleAbs(depth_image,alpha=0.03), cv2.COLORMAP_JET)
+    smoothed_filtered_img, _ = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, c = c_opt)
+    rendered_retina_img = display2retina(smoothed_filtered_img, acc_depth)
+    PSNR = metrics.peak_signal_noise_ratio(LF_rendered_image, rendered_retina_img)
+    SSIM = metrics.structural_similarity(LF_rendered_image, rendered_retina_img, multichannel=True)
+
+    cv2.imwrite("result/AR_image_rendering/sim_c/full_rendered_retina_img.png", rendered_retina_img)
+
+    writeline = "Optimal c = " + str(c_opt) + ", PSNR = " + str(PSNR) + ", SSIM = " + str(SSIM) + "\n"
+    f.write(writeline)
+
+    return c_opt
+
     
-    # H, W = color_image.shape[0], color_image.shape[1]
-    # point_y = int(H/2 * (1 + np.tan(converted_theta) / np.tan(COLOR_CAMERA_MAX_THETA)))
-    # point_x = int(W/2 * (1 + np.tan(converted_phi) / np.tan(COLOR_CAMERA_MAX_PHI)))
-    # point_y = np.clip(point_y, 0, H-1)
-    # point_x = np.clip(point_x, 0, W-1)
+def simulation_num_slicing_imgs(color_image, depth_image, LF_rendered_image, c_opt, pos) :
+    point_x, point_y = pos
+    f = open("result/AR_image_rendering/sim_num_slicing_imgs/sim_num_slicing_imgs.txt","w") # write simulation result
 
-    #find tracking point where depth is 3000mm
-    point_y = np.where(depth_image == acc_depth * 1000)[0][0]
-    point_x = np.where(depth_image == acc_depth * 1000)[1][0]
-
-    f = open("result/AR_image_rendering/simulation_result.txt","w") # write simulation result
-
-    for num_slicing_imgs in num_slicing_imgs_list:
+    for num in num_slicing_imgs_list:
         mean_time = 0.0
         actual_num_slicing_imgs = 0
         smoothed_filtered_img = np.zeros_like(color_image)
         
         for i in range(5): # repeat same work for 5 times and calculate mean time
             time_0 = time.time()
-            smoothed_filtered_img, actual_num_slicing_imgs = inverse_filtering(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, num_slicing_imgs)
-
+            smoothed_filtered_img, actual_num_slicing_imgs = rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, c = c_opt, num_slicing_imgs = num)
             mean_time += time.time() - time_0
         
-        mean_time /= 5
+        mean_time /= 5.0
 
         rendered_retina_img = display2retina(smoothed_filtered_img, acc_depth)
 
@@ -272,10 +487,6 @@ if __name__ == "__main__":
 
         writeline = str(actual_num_slicing_imgs) + " " + str(mean_time) + " " + str(PSNR) + " " + str(SSIM) + "\n"
         f.write(writeline)
-        
-        cv2.namedWindow('smoothed_filtered_img', cv2.WINDOW_AUTOSIZE)
-        cv2.imshow('smoothed_filtered_img', smoothed_filtered_img)
-        cv2.waitKey(1)
 
         rendered_retina_img = cv2.circle(rendered_retina_img, (point_x, point_y), 2, (0,0,255), -1)
         cv2.namedWindow('rendered_retina_img', cv2.WINDOW_AUTOSIZE)
@@ -286,6 +497,69 @@ if __name__ == "__main__":
         cv2.imshow('LF_rendered_image', LF_rendered_image)
         cv2.waitKey(1)
 
-        cv2.imwrite("result/AR_image_rendering/rendered_retina_img_"+str(actual_num_slicing_imgs)+".png", rendered_retina_img)
+        cv2.imwrite("result/AR_image_rendering/sim_num_slicing_imgs/rendered_retina_img_"+str(actual_num_slicing_imgs)+".png", rendered_retina_img)
        
     f.close()
+
+def adaptive_rendering_test(color_image, depth_image, LF_rendered_image, c_opt, pos) :
+    point_x, point_y = pos
+    diopter_range_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    
+    for idx in range(len(diopter_range_list)) : 
+        d_r = diopter_range_list[idx]
+        mean_time = 0.0
+        actual_num_slicing_imgs = 0
+        smoothed_filtered_img = np.zeros_like(color_image)
+        
+        for i in range(5): # repeat same work for 5 times and calculate mean time
+            time_0 = time.time()
+            smoothed_filtered_img, actual_num_slicing_imgs = adaptive_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, c = c_opt, diopter_range = d_r)
+            mean_time += time.time() - time_0
+        
+        mean_time /= 5.0
+
+        rendered_retina_img = display2retina(smoothed_filtered_img, acc_depth)
+
+        print("actual_num_slicing_imgs :", actual_num_slicing_imgs)
+        print("mean computation time : ", mean_time)
+        PSNR = metrics.peak_signal_noise_ratio(LF_rendered_image, rendered_retina_img)
+        SSIM = metrics.structural_similarity(LF_rendered_image, rendered_retina_img, multichannel=True)
+        print("PSNR : ", PSNR)
+        print("SSIM : ", SSIM)
+
+        rendered_retina_img = cv2.circle(rendered_retina_img, (point_x, point_y), 2, (0,0,255), -1)
+        cv2.namedWindow('rendered_retina_img', cv2.WINDOW_AUTOSIZE)
+        cv2.imshow('rendered_retina_img', rendered_retina_img)
+        cv2.waitKey(1)
+
+        cv2.namedWindow('LF_rendered_image', cv2.WINDOW_AUTOSIZE)
+        cv2.imshow('LF_rendered_image', LF_rendered_image)
+        cv2.waitKey(1)
+
+        cv2.imwrite("result/AR_image_rendering/adaptive_rendering/rendered_retina_img_%d.png"%idx, rendered_retina_img)
+
+
+if __name__ == "__main__":
+    color_image = cv2.imread('imageset/Castle/Lightfield/0025.png')
+    depth_image = cv2.imread('imageset/Castle/Depthmap/depthmap.png')    
+    depth_image = cv2.cvtColor(depth_image, cv2.COLOR_BGR2GRAY)
+    LF_rendered_image = cv2.imread('result/LF_result/Castle/depth%d.png' %(int(acc_depth *1000))) #rendered which accomodation depth is 3000mm
+
+    LF_rendered_image = cv2.resize(LF_rendered_image, dsize = RES, interpolation = cv2.INTER_AREA)
+    color_image = cv2.resize(color_image, dsize = RES, interpolation = cv2.INTER_AREA) 
+    depth_image = cv2.resize(depth_image, dsize = RES, interpolation = cv2.INTER_AREA)
+
+    depth_image = (255 - depth_image) * 3.0 / 255.0 * 1000.0 #depth : 0m(255) ~ 3m(0) linearly distributed
+
+    #find tracking point where depth is 3000mm
+    point_y = np.where(depth_image == acc_depth * 1000)[0][0]
+    point_x = np.where(depth_image == acc_depth * 1000)[1][0]
+
+    c_opt = 2.2e+4
+    #c_opt = simulation_c(color_image, depth_image, LF_rendered_image, pos = (point_x, point_y))
+
+    #simulation_num_slicing_imgs(color_image, depth_image, LF_rendered_image, c_opt, pos = (point_x, point_y))
+
+    adaptive_rendering_test(color_image, depth_image, LF_rendered_image, c_opt, pos = (point_x, point_y))
+
+    
