@@ -238,39 +238,22 @@ def adaptive_rendering_display(color_img, depth_img, gaze_depth, c = 2e+4, diopt
         pixel_select=np.zeros_like(depth_img)
         for diopter in diopters: # create boolean mask
             if diopter_range_bounds[idx] <= abs(diopter - gaze_diopter) and abs(diopter - gaze_diopter) < diopter_range_bounds[idx+1]:
-                pixel_select[depth_img==diopter] = 1 
-        
-        if idx == num_slicing_imgs - 1 : # add last depth on last slice
-            pixel_select[depth_img == diopter_range_bounds[num_slicing_imgs]] = 1
+                pixel_select[diopter_img == diopter] = 1
 
-        masked_depth_img = depth_img[pixel_select == 1]
+        masked_diopter_img = diopter_img[pixel_select == 1]
 
-        if len(masked_depth_img) == 0: # if masked_depth_img is blank
+        if len(masked_diopter_img) == 0: # if masked_depth_img is blank
             continue
         
-        mean_depth = np.mean(masked_depth_img)
+        if idx == 0 :
+            mean_diopter = gaze_diopter
+        else :
+            masked_diopter_img[masked_diopter_img < gaze_diopter] = 2 * gaze_diopter - masked_diopter_img[masked_diopter_img < gaze_diopter]
+            mean_diopter = np.mean(masked_diopter_img)    
         edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
         pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
         sliced_color_img = color_img * pixel_select
-        sliced_color_imgs.append((sliced_color_img, mean_depth / 1000.0))
-
-    pixel_select=np.zeros_like(depth_img)
-    pixel_select[abs(diopter_img - gaze_diopter) <= diopter_range] = 1 
-    edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
-    pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
-    sliced_color_img = color_img * pixel_select
-    sliced_color_imgs.append((sliced_color_img, gaze_depth))
-
-    pixel_select=np.zeros_like(depth_img)
-    pixel_select[abs(diopter_img - gaze_diopter) > diopter_range] = 1 
-    edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
-    masked_diopter_img = diopter_img[pixel_select == 1]
-    masked_diopter_img[masked_diopter_img < gaze_diopter] = 2 * gaze_diopter - masked_diopter_img[masked_diopter_img < gaze_diopter]
-    mean_diopter = np.mean(masked_diopter_img)    
-    pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
-    sliced_color_img = color_img * pixel_select    
-
-    sliced_color_imgs.append((sliced_color_img, 1 / mean_diopter))
+        sliced_color_imgs.append((sliced_color_img, 1 / mean_diopter))
 
     for sliced_color_img, mean_depth in sliced_color_imgs:
         b = (eye_focal_length / (gaze_depth - eye_focal_length))* pupil_diameter * abs(mean_depth - gaze_depth) / mean_depth # blur diameter
@@ -302,8 +285,8 @@ def adaptive_rendering_display(color_img, depth_img, gaze_depth, c = 2e+4, diopt
     dilated_edge = cv2.dilate(edge, np.ones((3, 3)))
     dilated_edge = np.stack((dilated_edge, dilated_edge, dilated_edge), axis=2)
 
-    #blurred_filtered_img = cv2.GaussianBlur(filtered_img, (5, 5), 0) # Smoothing boundary
-    blurred_filtered_img = filtered_img # No smoothing boundary
+    blurred_filtered_img = cv2.GaussianBlur(filtered_img, (5, 5), 0) # Smoothing boundary
+    #blurred_filtered_img = filtered_img # No smoothing boundary
     smoothed_filtered_img = np.where(dilated_edge==np.array([255,255,255]), blurred_filtered_img, filtered_img)
 
     #smoothed_filtered_img = filtered_img
@@ -503,7 +486,8 @@ def simulation_num_slicing_imgs(color_image, depth_image, LF_rendered_image, c_o
 
 def adaptive_rendering_test(color_image, depth_image, LF_rendered_image, c_opt, pos) :
     point_x, point_y = pos
-    diopter_range_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    f = open("result/AR_image_rendering/adaptive_rendering/sim_diopter_range.txt","w") # write simulation result
+    diopter_range_list = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     
     for idx in range(len(diopter_range_list)) : 
         d_r = diopter_range_list[idx]
@@ -520,12 +504,15 @@ def adaptive_rendering_test(color_image, depth_image, LF_rendered_image, c_opt, 
 
         rendered_retina_img = display2retina(smoothed_filtered_img, acc_depth)
 
-        print("actual_num_slicing_imgs :", actual_num_slicing_imgs)
+        print("diopter range :", d_r)
         print("mean computation time : ", mean_time)
         PSNR = metrics.peak_signal_noise_ratio(LF_rendered_image, rendered_retina_img)
         SSIM = metrics.structural_similarity(LF_rendered_image, rendered_retina_img, multichannel=True)
         print("PSNR : ", PSNR)
         print("SSIM : ", SSIM)
+
+        writeline = str(d_r) + " " + str(mean_time) + " " + str(PSNR) + " " + str(SSIM) + "\n"
+        f.write(writeline)
 
         rendered_retina_img = cv2.circle(rendered_retina_img, (point_x, point_y), 2, (0,0,255), -1)
         cv2.namedWindow('rendered_retina_img', cv2.WINDOW_AUTOSIZE)
@@ -536,7 +523,9 @@ def adaptive_rendering_test(color_image, depth_image, LF_rendered_image, c_opt, 
         cv2.imshow('LF_rendered_image', LF_rendered_image)
         cv2.waitKey(1)
 
-        cv2.imwrite("result/AR_image_rendering/adaptive_rendering/rendered_retina_img_%d.png"%idx, rendered_retina_img)
+        cv2.imwrite("result/AR_image_rendering/adaptive_rendering/rendered_retina_img_dr_%d.png"%(d_r * 10), rendered_retina_img)
+
+    f.close()
 
 
 if __name__ == "__main__":
