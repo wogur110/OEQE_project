@@ -209,7 +209,10 @@ def full_rendering_display(color_img, depth_img, gaze_depth, c = 2e+4):
 
 def adaptive_rendering_display(color_img, depth_img, gaze_depth, c = 2e+4, diopter_range = 0.6):
     """
-    slice color image by 'each depth' in depth image. Create corresponding PSF on each slice. 
+    slice color image with respect to diopter_range. 
+    If abs(diopter - gaze_diopter) < diopter_range, put pixel first slice which mean_depth = gaze_depth
+    If abs(diopter - gaze_diopter) >= diopter_range, put pixel second slice and compute mean_depth = 1 / mean_diopter
+    Create corresponding PSF on each slice. 
     Apply convolution on every slice and add up every slice. return normalized reconstructed image.
     c : coefficient for gaussian psf
     """
