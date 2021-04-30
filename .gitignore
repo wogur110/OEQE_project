@@ -1,3 +1,5 @@
 .vscode/
 *.npy
 Dataset/*
+result/*
+imageset/*

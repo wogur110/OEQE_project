@@ -27,7 +27,7 @@ from skimage import color, data, restoration, metrics
 import screeninfo
 
 #Get ScreenInfo
-screen_id = 0
+screen_id = 1
 screen = screeninfo.get_monitors()[screen_id]
 resolution = [screen.width, screen.height]
 
@@ -62,9 +62,7 @@ pupil_diameter = 2e-3
 eye_length = 24e-3
 eye_relief = 1e-1
 kernel_radius_pixel = 21
-#res_window = 21,21
-#window_size = 0.2e-3, 0.2e-3
-num_slicing_imgs = 8
+num_slicing_imgs = 8 # for rendering_display
 
 # Convert matrix default setting
 convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341, 0.7817]])
@@ -138,93 +136,70 @@ def convert_pupil_to_realsense(theta, phi) :
 
     return converted_theta, converted_phi
 
-
-def inverse_filtering(color_img, depth_img, gaze_depth) :
+def full_rendering_display(color_img, depth_img, gaze_depth, c = 2.2e+4):
     """
-    1. Slice color image by 'num_slicing_imgs' in depth image. Create corresponding PSF on each slice. 
-    2. Apply wiener deconvolution on every slice and add up every slice. 
-    3. Smoothing boundaries between sliced image with gaussian blur
-    4. Return normalized reconstructed image.    
+    slice color image by 'each depth' in depth image. Create corresponding PSF on each slice. 
+    Apply convolution on every slice and add up every slice. return normalized reconstructed image.
+    c : coefficient for gaussian psf
     """
-
     eye_focal_length = 1 / (1 / gaze_depth + 1 / eye_length)
-    c = 4e+4   #coefficient for gaussian psf
-    color_img = color_img.astype(float)
-    depth_img = depth_img.astype(float)
-    filtered_img = np.zeros_like(color_img)
+    color_img=color_img.astype(float)
+    depth_img=depth_img.astype(float)
+    filtered_img=np.zeros_like(color_img)
     edge = np.zeros_like(depth_img)
 
     # Calculate target intensity sum
     target_intensity_sum = np.sum(color_img)
-    
-    RES = COLOR_CAMERA_RES  #resolution of color_img, detph_img
-    x,y = np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2 - 1, RES[0]), np.linspace(-RES[1]//2, RES[1]//2 - 1, RES[1]))
-    radius = np.sqrt(x*x + y*y)
 
-    depths = depth_img[depth_img > 0]
-    percentiles = np.linspace(0,100,num_slicing_imgs+1)
-    depth_bounds = np.percentile(depths, percentiles, interpolation='nearest')
-    depths = np.unique(depths)
+    RES = COLOR_CAMERA_RES  #resolution of color_img, detph_img
+    x,y = np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2-1,RES[0]), np.linspace(-RES[1]//2,RES[1]//2-1,RES[1]))
+    radius = np.sqrt(x*x+y*y)
+
+    depths = np.unique(depth_img[depth_img>0])
 
     sliced_color_imgs = []
 
-    for idx in range(num_slicing_imgs) :
-        pixel_select = np.zeros_like(depth_img)
-        for depth in depths :
-            if depth_bounds[idx] <= depth and depth < depth_bounds[idx+1] :
-                pixel_select[depth_img == depth] = 1
+    for depth in depths : 
+        pixel_select=np.zeros_like(depth_img)
+        pixel_select[depth_img == depth] = 1 
 
-        if idx == num_slicing_imgs - 1 :
-            pixel_select[depth_img == depth_bounds[idx+1]] = 1
-
-        masked_depth_img = depth_img[pixel_select == 1]
-        
-        if len(masked_depth_img) == 0 :
-            continue
-
-        mean_depth = np.mean(masked_depth_img)
         edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
-        pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
+        pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
         sliced_color_img = color_img * pixel_select
-        sliced_color_imgs.append((sliced_color_img, mean_depth / 1000.0))
+        sliced_color_imgs.append((sliced_color_img, depth / 1000.0))
 
-    for sliced_color_img, mean_depth in sliced_color_imgs :
-        b = (eye_focal_length / (gaze_depth - eye_focal_length)) * pupil_diameter * abs(mean_depth - gaze_depth) / mean_depth #blur diameter
-        kernel = np.zeros_like(sliced_color_img[:,:,0])
-
+    for sliced_color_img, mean_depth in sliced_color_imgs:
+        b = (eye_focal_length / (gaze_depth - eye_focal_length))* pupil_diameter * abs(mean_depth - gaze_depth) / mean_depth # blur diameter
+        kernel = np.zeros_like(sliced_color_img[:,:,0]) # same size with single channel of image (2D)
+        
         if b == 0 :
-            kernel[RES[1]//2, RES[0]//2] = 1    #delta function
+            kernel[RES[1]//2, RES[0]//2] = 1 # delta function
         else :
             kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
             kernel[radius > kernel_radius_pixel] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
-
+        
         #normalization
-        if np.sum(kernel) == 0 :
-            kernel[res_window[1]//2, res_window[0]//2] = 1            
-        else :
+        if np.sum(kernel) == 0: # when does this occurs? if psf is too small in every pixel
+            kernel[res_window[1]//2, res_window[0]//2]=1
+        else:
             kernel = kernel / np.sum(kernel)
 
-        R_img_slice, G_img_slice, B_img_slice = sliced_color_img[:,:,0], sliced_color_img[:,:,1], sliced_color_img[:,:,2]
-
-        compensate_R = restoration.wiener(R_img_slice, kernel, 1e+0, clip=False)
-        compensate_G = restoration.wiener(G_img_slice, kernel, 1e+0, clip=False)
-        compensate_B = restoration.wiener(B_img_slice, kernel, 1e+0, clip=False)
-
-        compensate_img = np.stack((compensate_R, compensate_G, compensate_B), axis = 2)
+        compensate_img = cv2.filter2D(sliced_color_img, -1, kernel)
         filtered_img += compensate_img
 
     #just add zero depth pixel to filtered image
     pixel_select = np.zeros_like(depth_img)
-    pixel_select[depth_img == 0] = 1
+    pixel_select[depth_img==0] = 1
     pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
     color_img_zero_depth = color_img * pixel_select
-    filtered_img += color_img_zero_depth    
+    filtered_img += color_img_zero_depth
 
     edge = np.clip(edge, 0, 255).astype('uint8')
     dilated_edge = cv2.dilate(edge, np.ones((3, 3)))
     dilated_edge = np.stack((dilated_edge, dilated_edge, dilated_edge), axis=2)
 
-    blurred_filtered_img = cv2.GaussianBlur(filtered_img, (11, 11), 0)
+    #blurred_filtered_img = cv2.GaussianBlur(filtered_img, (5, 5), 0) # Smoothing boundary
+    blurred_filtered_img = filtered_img # No smoothing boundary
     smoothed_filtered_img = np.where(dilated_edge==np.array([255,255,255]), blurred_filtered_img, filtered_img)
 
     #smoothed_filtered_img = filtered_img
@@ -232,7 +207,94 @@ def inverse_filtering(color_img, depth_img, gaze_depth) :
     smoothed_filtered_img = smoothed_filtered_img / np.sum(smoothed_filtered_img) * target_intensity_sum / 255.0
     smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, 1)
 
-    return smoothed_filtered_img
+    return smoothed_filtered_img, len(sliced_color_imgs)
+
+def rendering_display(color_img, depth_img, gaze_depth, c = 2.2e+4, num_slicing_imgs = 4):
+    """
+    slice color image by 'num_slicing_imgs' in depth image. Create corresponding PSF on each slice. 
+    Apply convolution on every slice and add up every slice. return normalized reconstructed image.
+    c : coefficient for gaussian psf
+    """
+    eye_focal_length = 1 / (1 / gaze_depth + 1 / eye_length)
+    color_img=color_img.astype(float)
+    depth_img=depth_img.astype(float)
+    filtered_img=np.zeros_like(color_img)
+    edge = np.zeros_like(depth_img)
+
+    # Calculate target intensity sum
+    target_intensity_sum = np.sum(color_img)
+
+    RES = COLOR_CAMERA_RES  #resolution of color_img, detph_img
+    x,y = np.meshgrid(np.linspace(-RES[0]//2, RES[0]//2-1,RES[0]), np.linspace(-RES[1]//2,RES[1]//2-1,RES[1]))
+    radius = np.sqrt(x*x+y*y)
+
+    depths = depth_img[depth_img>0]
+    percentiles = np.linspace(0,100,num_slicing_imgs+1)
+    depth_bounds = np.percentile(depths, percentiles, interpolation='nearest')
+    depths = np.unique(depths)
+
+    sliced_color_imgs = []
+
+    for idx in range(num_slicing_imgs): # idx th slice
+        pixel_select=np.zeros_like(depth_img)
+        for depth in depths: # create boolean mask
+            if depth_bounds[idx] <= depth and depth< depth_bounds[idx+1]:
+                pixel_select[depth_img==depth] = 1 
+        
+        if idx == num_slicing_imgs - 1 : # add last depth on last slice
+            pixel_select[depth_img == depth_bounds[num_slicing_imgs]] = 1
+
+        masked_depth_img = depth_img[pixel_select == 1]
+
+        if len(masked_depth_img) == 0: # if masked_depth_img is blank
+            continue
+        
+        mean_depth = np.mean(masked_depth_img)
+        edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
+        pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
+        sliced_color_img = color_img * pixel_select
+        sliced_color_imgs.append((sliced_color_img, mean_depth / 1000.0))
+
+    for sliced_color_img, mean_depth in sliced_color_imgs:
+        b = (eye_focal_length / (gaze_depth - eye_focal_length))* pupil_diameter * abs(mean_depth - gaze_depth) / mean_depth # blur diameter
+        kernel = np.zeros_like(sliced_color_img[:,:,0]) # same size with single channel of image (2D)
+        
+        if b == 0 :
+            kernel[RES[1]//2, RES[0]//2] = 1 # delta function
+        else :
+            kernel = 2 / (pi * (c * b)**2) * np.exp(-2 * radius**2 / (c * b)**2)
+            kernel[radius > kernel_radius_pixel] = 0    #Use 21*21 nonzero points near origin, otherwise, value is zero
+        
+        #normalization
+        if np.sum(kernel) == 0: # when does this occurs? if psf is too small in every pixel
+            kernel[res_window[1]//2, res_window[0]//2]=1
+        else:
+            kernel = kernel / np.sum(kernel)
+
+        compensate_img = cv2.filter2D(sliced_color_img, -1, kernel)
+        filtered_img += compensate_img
+
+    #just add zero depth pixel to filtered image
+    pixel_select = np.zeros_like(depth_img)
+    pixel_select[depth_img==0] = 1
+    pixel_select = np.stack((pixel_select, pixel_select, pixel_select), axis = 2)
+    color_img_zero_depth = color_img * pixel_select
+    filtered_img += color_img_zero_depth
+
+    edge = np.clip(edge, 0, 255).astype('uint8')
+    dilated_edge = cv2.dilate(edge, np.ones((3, 3)))
+    dilated_edge = np.stack((dilated_edge, dilated_edge, dilated_edge), axis=2)
+
+    #blurred_filtered_img = cv2.GaussianBlur(filtered_img, (5, 5), 0) # Smoothing boundary
+    blurred_filtered_img = filtered_img # No smoothing boundary
+    smoothed_filtered_img = np.where(dilated_edge==np.array([255,255,255]), blurred_filtered_img, filtered_img)
+
+    #smoothed_filtered_img = filtered_img
+    smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, np.max(smoothed_filtered_img))
+    smoothed_filtered_img = smoothed_filtered_img / np.sum(smoothed_filtered_img) * target_intensity_sum / 255.0
+    smoothed_filtered_img = np.clip(smoothed_filtered_img, 0, 1)
+
+    return smoothed_filtered_img, len(sliced_color_imgs)
 
 
 if __name__ == "__main__":
@@ -329,7 +391,8 @@ if __name__ == "__main__":
             depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
             color_image = cv2.circle(color_image, (point_x, point_y), 3, (0,255,0), -1)
-            filtered_image = inverse_filtering(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
+            filtered_image = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
+            #filtered_image = rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, num_slicing_imgs = num_slicing_imgs)
             filtered_image = cv2.circle(filtered_image, (point_x, point_y), 3, (0,255,0), -1)
 
             # print("time : ", round(current_time - time_0, 4))
@@ -338,17 +401,16 @@ if __name__ == "__main__":
 
 
             # Show images
-            cv2.namedWindow('Convert_filtered_image', cv2.WINDOW_AUTOSIZE)
-            #cv2.resizeWindow("Convert_filtered_image", resolution[0], resolution[1])
-            #cv2.moveWindow('Convert_filtered_image', screen.x - 1, screen.y - 1)
-            #cv2.setWindowProperty('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.namedWindow('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN)
+            cv2.resizeWindow("Convert_filtered_image", resolution[0], resolution[1])
+            cv2.moveWindow('Convert_filtered_image', screen.x - 1, screen.y - 1)
+            cv2.setWindowProperty('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
             display_filtered_image = cv2.copyMakeBorder(filtered_image, int((resolution[1]-filtered_image.shape[0])/2), int((resolution[1]-filtered_image.shape[0])/2), int((resolution[0]-filtered_image.shape[1])/2), int((resolution[0]-filtered_image.shape[1])/2), 0)
 
             cv2.imshow('Convert_filtered_image', display_filtered_image)
 
             images = np.hstack((color_image, depth_colormap))
-
             cv2.namedWindow('original_image', cv2.WINDOW_AUTOSIZE)
             cv2.imshow('original_image', images)
             cv2.waitKey(1)
