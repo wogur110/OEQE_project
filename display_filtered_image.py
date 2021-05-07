@@ -62,7 +62,7 @@ pupil_diameter = 2e-3
 eye_length = 24e-3
 eye_relief = 1e-1
 kernel_radius_pixel = 21
-num_slicing_imgs = 8 # for rendering_display
+num_slicing_imgs = 4 # for rendering_display
 
 # Convert matrix default setting
 convert_matrix = np.array([[1.0078, 0.1722, 0.0502], [0, 0, 0], [0.0532, -0.6341, 0.7817]])
@@ -136,7 +136,7 @@ def convert_pupil_to_realsense(theta, phi) :
 
     return converted_theta, converted_phi
 
-def full_rendering_display(color_img, depth_img, gaze_depth, c = 2.2e+4):
+def full_rendering_display(color_img, depth_img, gaze_depth, c = 8.0e+4):
     """
     slice color image by 'each depth' in depth image. Create corresponding PSF on each slice. 
     Apply convolution on every slice and add up every slice. return normalized reconstructed image.
@@ -209,7 +209,7 @@ def full_rendering_display(color_img, depth_img, gaze_depth, c = 2.2e+4):
 
     return smoothed_filtered_img, len(sliced_color_imgs)
 
-def rendering_display(color_img, depth_img, gaze_depth, c = 2.2e+4, num_slicing_imgs = 4):
+def rendering_display(color_img, depth_img, gaze_depth, c = 8.0e+4, num_slicing_imgs = 4):
     """
     slice color image by 'num_slicing_imgs' in depth image. Create corresponding PSF on each slice. 
     Apply convolution on every slice and add up every slice. return normalized reconstructed image.
@@ -250,6 +250,9 @@ def rendering_display(color_img, depth_img, gaze_depth, c = 2.2e+4, num_slicing_
             continue
         
         mean_depth = np.mean(masked_depth_img)
+        if int(gaze_depth*1000) in masked_depth_img :
+            mean_depth = int(gaze_depth*1000)
+
         edge += cv2.Canny(np.uint8(pixel_select*255), 50, 100)
         pixel_select = np.stack((pixel_select,pixel_select,pixel_select), axis = 2)
         sliced_color_img = color_img * pixel_select
@@ -367,15 +370,19 @@ if __name__ == "__main__":
             phi = message_1[b'phi']
 
             # Filter the depth frame
-            #depth_frame = spatial.process(depth_frame)
+            depth_frame = spatial.process(depth_frame)
             depth_frame = hole_filling.process(depth_frame)
 
             # Convert images to numpy arrays
             depth_image = np.asanyarray(depth_frame.get_data())
+            diopter_image = 1000.0/depth_image
             color_image = np.asanyarray(color_frame.get_data())
+            # breakpoint()
 
             # Apply colormap on depth image (image must be converted to 8-bit per pixel first)
-            depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+            # depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.085), cv2.COLORMAP_JET)
+            depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(diopter_image, alpha=63.75), cv2.COLORMAP_JET)
+            #depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
 
             # Check tracking point on images
             converted_theta, converted_phi = convert_pupil_to_realsense(theta, phi)
@@ -386,14 +393,16 @@ if __name__ == "__main__":
             point_y = np.clip(point_y, 0, H-1)
             point_x = np.clip(point_x, 0, W-1)
 
-            depth_colormap = cv2.circle(depth_colormap, (point_x, point_y), 3, (0,255,0), -1)
-            text = "depth : " + str(depth_image[point_y][point_x]) + "mm"
-            depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+            # depth_colormap = cv2.circle(depth_colormap, (point_x, point_y), 5, (0,0,255), -1)
+            # text = "depth : " + str(depth_image[point_y][point_x]) + "mm"
+            # depth_colormap = cv2.putText(depth_colormap, text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
 
-            color_image = cv2.circle(color_image, (point_x, point_y), 3, (0,255,0), -1)
-            filtered_image = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
-            #filtered_image = rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, num_slicing_imgs = num_slicing_imgs)
-            filtered_image = cv2.circle(filtered_image, (point_x, point_y), 3, (0,255,0), -1)
+            
+            #filtered_image = color_image
+            # filtered_image, _ = full_rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0)
+            filtered_image, _ = rendering_display(color_image, depth_image, depth_image[point_y][point_x] / 1000.0, num_slicing_imgs = num_slicing_imgs)
+            filtered_image = cv2.circle(filtered_image, (point_x, point_y), 5, (0,0,255), -1)
+            # color_image = cv2.circle(color_image, (point_x, point_y), 5, (0,0,255), -1)
 
             # print("time : ", round(current_time - time_0, 4))
             # print("theta, phi : ", theta, phi)
@@ -407,6 +416,7 @@ if __name__ == "__main__":
             cv2.setWindowProperty('Convert_filtered_image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
             display_filtered_image = cv2.copyMakeBorder(filtered_image, int((resolution[1]-filtered_image.shape[0])/2), int((resolution[1]-filtered_image.shape[0])/2), int((resolution[0]-filtered_image.shape[1])/2), int((resolution[0]-filtered_image.shape[1])/2), 0)
+            #display_filtered_image = filtered_image
 
             cv2.imshow('Convert_filtered_image', display_filtered_image)
 
